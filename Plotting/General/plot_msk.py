@@ -18,11 +18,15 @@ msk = xr.where((msk == 0) & (top_lev == 1),  -1, top_lev)
 #msk_cut = msk[2660:2790,3765:3933]
 #msk[2660:2790,3765:3933] = xr.where(msk_cut == -1, 0, msk_cut)
 
+with ProgressBar():
+    msk = msk.load()
+print (msk)
 plt.figure(figsize=(3, 3))
-ax = plt.axes(projection=ccrs.Orthographic())
-plt.pcolor(msk.load(), transform=ccrs.PlateCarree())
-ax.coastlines(resolution='110m')
-ax.gridlines()
+#ax = plt.axes(projection=ccrs.Orthographic())
+ax = plt.axes(projection=ccrs.PlateCarree())
+plt.pcolor(msk.x, msk.y, msk, transform=ccrs.PlateCarree())
+#ax.coastlines(resolution='110m')
+#ax.gridlines()
 
 
-plt.show()
+plt.savefig("msk.png")

@@ -15,11 +15,13 @@ matplotlib.rcParams.update({'font.size': 8})
 
 def plot_temperature():
     path = "/gws/nopw/j04/verify_oce/NEMO/"
-    fn = path + "Outputs/ORCA2_1h_18500101_18500107_grid_T.nc"
-    cfg = path + "Preprocessing/DOM/omain_cfg_zps_gdept.nc"
+    fn0 = path + "Outputs/EXP_zlevel_LSM_new_radiation/1850/02/VERIFY_6h_18500201_18500228_grid_T.nc"
+    fn1 = fn0
+    cfg = path + "Preprocessing/DOM/domain_cfg_zps_gdept.nc"
     
     # get surface temperature
-    temp = xr.open_dataset(fn, chunks=-1).sst_con
+    temp0 = xr.open_dataset(fn0, chunks=-1).sst_con
+    temp1 = xr.open_dataset(fn1, chunks=-1).sst_con
     
     # set temperature limits and time choices
     tmin, tmax = -5, 30
@@ -27,7 +29,7 @@ def plot_temperature():
     
     # plot setup
     proj=ccrs.AlbersEqualArea()
-    proj=ccrs.PlateCarree()
+    proj=ccrs.Orthographic(central_latitude=70)
     plt_proj=ccrs.PlateCarree()
     proj_dict = {"projection": plt_proj}
     fig, axs = plt.subplots(1,2, figsize=(6.5,4.0), subplot_kw=proj_dict)
@@ -42,22 +44,26 @@ def plot_temperature():
              cftime.datetime(1850,1,1,4, calendar="noleap"),
              cftime.datetime(1850,1,1,7, calendar="noleap")]
    
-    times = [cftime.datetime(1850,1,1,1, calendar="noleap"),
-             cftime.datetime(1850,1,1,7, calendar="noleap")]
+    times = [cftime.datetime(1850,2,28, calendar="noleap"),
+             cftime.datetime(1850,2,28, calendar="noleap")]
+    time =          cftime.datetime(1850,2,28, calendar="noleap")
+    with ProgressBar():
+        temp0_t = temp0.sel(time_counter=time, method="nearest").load()
+        temp1_t = temp1.sel(time_counter=time, method="nearest").load()
+    temps = [temp0_t,temp1_t]
+
     # render temperature
-    for i, time in enumerate(times):
-        with ProgressBar():
-            temp_t = temp.sel(time_counter=time, method="nearest").load()
-        print(temp_t)
+    for i, temp_t in enumerate(temps):
         p = axs[i].pcolor(temp_t.nav_lon, temp_t.nav_lat, temp_t, 
                    vmin=tmin, vmax=tmax,
                    transform=proj, cmap=cmocean.cm.thermal, shading="nearest")
 
         date_str = "Date: " + temp_t.time_counter.dt.strftime("%Y-%m-%d").values
+    #date_str = "Date: " + temp_t.time_counter.dt.strftime("%Y-%m-%d").values
         print (date_str)
         axs[i].text(0.5,0.97, date_str, transform=fig.transFigure,
                  ha="center",va="top")
-        
+    
     
     
         axs[i].add_feature(cfeature.LAND, zorder=100, edgecolor='k')
