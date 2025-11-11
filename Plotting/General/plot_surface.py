@@ -135,6 +135,7 @@ def render(fig, ax, cfg, da, vmin, vmax, cmap, proj, cbar_txt="",
     cbar.ax.text(0.5, -3.5, cbar_txt, fontsize=8, rotation=0,
                  transform=cbar.ax.transAxes, va='top', ha='center')
 
+
 if __name__ == "__main__":
     dask.config.set(scheduler="single-threaded")
     plot_temperature()
