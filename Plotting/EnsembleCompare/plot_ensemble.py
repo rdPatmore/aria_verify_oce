@@ -184,7 +184,6 @@ class glosat_ensemble_analysis(object):
             ax.set_title("JJA")
 
         plt.savefig(self.save_path + f"glosat_{var}_change.png", dpi=600)
-        
 
 if __name__ == "__main__":
     gea = glosat_ensemble_analysis()
