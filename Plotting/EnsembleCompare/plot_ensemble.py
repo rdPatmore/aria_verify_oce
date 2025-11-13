@@ -18,8 +18,8 @@ class glosat_ensemble_analysis(object):
                             "u-cu100",
                             "u-cu101",
                             "u-cu102"]
-        self.t0_range=["1850-01","1869-12"]
-        self.t1_range=["1940-01","1959-12"]
+        self.t0_range=["1850","1870"]
+        self.t1_range=["1940","1960"]
 
         self.dom_path = "/gws/nopw/j04/verify_oce/NEMO/Preprocessing/DOM/UKESM/domcfg_UKESM1p1_gdept.nc"
 
@@ -82,135 +82,116 @@ class glosat_ensemble_analysis(object):
                 #plt.gca().set_xticklabels(times.data)
             axs.plot(np.arange(1850,1900), ice_ts_cycle)
 
-    def get_mean_surface_glosat_temperature(self, 
-             date_range=["1850-01","1869-12"], dir_str="18[5-7]"):
+    def get_mean_glosat_variable(self, var="tos",
+             y0=1850, y1=1870, dir_str="18[5-7]"):
 
         def preProcess(ds):
-            ds = ds.tos
             ds = ds.drop_vars("time_counter")
             ds = ds.swap_dims({"time_counter":"time_centered"})
-            print (ds)
             return ds
-        #paths = glob.glob(self.glosat_path + self.ensemble_list[0] + "/18[5-6]*/*grid-T.nc")
-        paths = glob.glob(self.glosat_path + self.ensemble_list[0] +"/" +
-                          dir_str + "*/*_1m_*grid-T.nc")
-        ds_series = xr.open_mfdataset(paths, chunks=dict(time_centered=1),
-                        combine="nested",  preprocess=preProcess,
-                        concat_dim="time_centered")
-        ds_series = ds_series.sel(time_centered=slice(date_range[0],
-                                                      date_range[1]))
+        path_set = []
+        for y in range(y0, y1):
+            print (y)
+            paths0 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                 "/" + str(y) + f"*/*1m_{y}*grid-T.nc")
+            paths1 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                 "/" + str(y+1) + f"*/*1m_{y}*grid-T.nc")
+            paths = paths0 + paths1
+
+            path_set += paths
+
+        def get_da(path):
+            da = xr.open_dataset(path, chunks={"time_counter":1})[var]
+            da = da.drop_vars("time_counter")
+            da = da.swap_dims({"time_counter":"time_centered"})
+            return da
+
+        da_series = get_da(path_set[0])
+        for path in path_set[1:]:
+            da = get_da(path)
+            da_series = xr.concat([da_series, da], dim="time_centered")
 
         with ProgressBar():
-            ds_mean = ds_series.groupby("time_centered.month").mean().load()
+            da_mean = da_series.groupby("time_centered.month").mean().load()
 
-        ds_mean.to_netcdf(self.save_path + "glosat_mean_temp_" + date_range[0] + "_" + date_range[1] + ".nc")
+        da_mean.to_netcdf(self.save_path + f"glosat_mean_{var}_{y0}_{y1}.nc")
 
-    def plot_mean_surface_glosat_temperature_change(self):
+    def plot_mean_glosat_change(self, var, label, unit, vmin, vmax):
         """
         plot surface temperature change
         """
         
-        ds_t0 = xr.open_dataarray(self.save_path + "glosat_mean_temp_" + 
+        # get datasets
+        da_t0 = xr.open_dataarray(self.save_path + f"glosat_mean_{var}_" + 
                               self.t0_range[0] + "_" + self.t0_range[1] + ".nc")
-        ds_t1 = xr.open_dataarray(self.save_path + "glosat_mean_temp_" + 
+        da_t1 = xr.open_dataarray(self.save_path + f"glosat_mean_{var}_" + 
                               self.t1_range[0] + "_" + self.t1_range[1] + ".nc")
-        print (ds_t0)
-        ds_t0_DJF = ds_t0.sel(month=[1,2,12]).mean("month")
-        ds_t1_DJF = ds_t1.sel(month=[1,2,12]).mean("month")
 
-        ds_t0_JJA = ds_t0.sel(month=[6,7,8]).mean("month")
-        ds_t1_JJA = ds_t1.sel(month=[6,7,8]).mean("month")
-        print (ds_t0_JJA)
+        # get seasonal means
+        da_t0_DJF = da_t0.sel(month=[1,2,12]).mean("month")
+        da_t1_DJF = da_t1.sel(month=[1,2,12]).mean("month")
+        da_t0_JJA = da_t0.sel(month=[6,7,8]).mean("month")
+        da_t1_JJA = da_t1.sel(month=[6,7,8]).mean("month")
 
-        diff_DJF = ds_t1_DJF - ds_t0_DJF
-        diff_JJA = ds_t1_JJA - ds_t0_JJA
+        # get differences
+        diff_DJF = da_t1_DJF - da_t0_DJF
+        diff_JJA = da_t1_JJA - da_t0_JJA
 
-        dom_cfg = xr.open_dataset(self.dom_path).squeeze()
-        lon = dom_cfg.glamt
-        lat = dom_cfg.gphit
-        print (list(dom_cfg.data_vars))
-
-        a = xr.open_dataset("/gws/nopw/j04/jmmp/GOSI9/eORCA1/ocean_annual/nemo_cw234o_1y_20031201-20041201_grid-T.nc")
-        print (a)
-
+        # initialise figure
         proj = ccrs.PlateCarree()
         proj_dict={"projection":ccrs.Orthographic(-30,60)}
-        fig, axs = plt.subplots(3,2, figsize=(6.5,10),
-                subplot_kw=proj_dict)
-                #subplot_kw={"projection":ccrs.Orthographic(-10,45)})
-        #ax = plt.axes(projection=ccrs.PlateCarree())
+        fig, axs = plt.subplots(3,2, figsize=(6.5,8), subplot_kw=proj_dict)
+        plt.subplots_adjust(top=0.95, right=0.95, left=0.05, bottom=0.05)
 
-        #axs[0,0].pcolor(ds_t0_DJF.nav_lon, ds_t0_DJF.nav_lat, ds_t0_DJF,
-        #p = ax.pcolor(a.nav_lon, a.nav_lat, a.zos.squeeze(), transform=proj)
-        #axs[0,0].coastlines()
-        #axs[0,1].pcolor(ds_t1_DJF.nav_lon, ds_t1_DJF.nav_lat, ds_t1_DJF,
-        #    transform=ccrs.PlateCarree(), vmin=-10, vmax=10)
-        #axs[0,2].pcolor(diff_DJF.nav_lon, diff_DJF.nav_lat, diff_DJF, 
-        #               vmin=-2, vmax=2, cmap=plt.cm.RdBu_r,
-        #    transform=ccrs.PlateCarree())
-        #               
+        def render(ax, da, tmin, tmax, cmap, proj, label=""):
+            pn = ax.pcolormesh(da.nav_lon, da.nav_lat, da, transform=proj,
+                               vmin=tmin, vmax=tmax, cmap=cmap)
+            cb = plt.colorbar(pn, ax=ax, extend="both")
+            cb.ax.set_ylabel(label)
 
-        #axs[1,0].pcolor(ds_t0_JJA.nav_lon, ds_t0_JJA.nav_lat, ds_t0_JJA,
-        #    transform=ccrs.PlateCarree(), vmin=-10, vmax=10)
-        #axs[1,1].pcolor(ds_t1_JJA.nav_lon, ds_t1_JJA.nav_lat, ds_t1_JJA,
-        #    transform=ccrs.PlateCarree(), vmin=-10, vmax=10)
-        #axs[1,2].pcolor(diff_JJA.nav_lon, diff_JJA.nav_lat, diff_JJA, 
-        #               vmin=-2, vmax=2, cmap=plt.cm.RdBu_r,
-        #    transform=ccrs.PlateCarree())
+        # set colourbar lims and map
+        cmap=plt.cm.viridis
 
-        tmin, tmax = -10, 30
-        cmap=cmocean.cm.thermal
-        def render(ax, ds, tmin, tmax, cmap):
+        # render means
+        render(axs[0,0], da_t0_DJF, vmin, vmax, cmap, proj,
+               f"{label} 1850-1870")
+        render(axs[1,0], da_t1_DJF, vmin, vmax, cmap, proj,
+               f"{label} 1940-1960")
+        render(axs[0,1], da_t0_JJA, 0, 50, cmap, proj,
+               f"{label} 1850-1870")
+        render(axs[1,1], da_t1_JJA, 0, 50, cmap, proj,
+               f"{label} 1940-1960")
 
-        pn = axs[0,0].pcolormesh(ds_t0_DJF.nav_lon, ds_t0_DJF.nav_lat,
-                                 ds_t0_DJF, transform=proj,
-                                 vmin=tmin, vmax=tmax, cmap=cmap)
-                #vmin=tmin, vmax=tmax, cmap=cmap, add_colorbar=False)
-        #pn = ds_t0_DJF.plot(x="nav_lon", y="nav_lat", transform=proj, ax=axs[0,0],
-        cb = plt.colorbar(pn, ax=axs[0,0], extend="both")
-        cb.ax.set_ylabel("Surface Temperature 1850-1870")
+        # set colourbar lims and map
+        tmin, tmax = -200, 200 
+        cmap=cmocean.cm.balance
         
-        #pn = ds_t1_DJF.plot(x="nav_lon", y="nav_lat", transform=proj, ax=axs[1,0],
-        #        vmin=tmin, vmax=tmax, cmap=cmap, add_colorbar=False)
-        #cb = plt.colorbar(pn, ax=axs[1,0], extend="both")
-        #cb.ax.set_ylabel("Surface Temperature 1940-1960")
+        # render differnces
+        render(axs[2,0], diff_DJF, tmin, tmax, cmap, proj,
+               f"Mean {label} Change")
+        tmin, tmax = -20, 20 
+        render(axs[2,1], diff_JJA, tmin, tmax, cmap, proj,
+               f"Mean {label} Change")
 
-        #pn = ds_t0_JJA.plot(x="nav_lon", y="nav_lat", transform=proj, ax=axs[0,1],
-        #        vmin=tmin, vmax=tmax, cmap=cmap, add_colorbar=False)
-        #cb = plt.colorbar(pn, ax=axs[0,1], extend="both")
-        #cb.ax.set_ylabel("Surface Temperature 1850-1870")
-
-        #pn = ds_t1_JJA.plot(x="nav_lon", y="nav_lat", transform=proj, ax=axs[1,1],
-        #        vmin=tmin, vmax=tmax, cmap=cmap, add_colorbar=False)
-        #cb = plt.colorbar(pn, ax=axs[1,1], extend="both")
-        #cb.ax.set_ylabel("Surface Temperature 1940-1960")
-
-        #pn = diff_DJF.plot(x="nav_lon", y="nav_lat", transform=proj, ax=axs[2,0],
-        #        add_colorbar=False)
-        #cb = plt.colorbar(pn, ax=axs[2,0], extend="both")
-        #cb.ax.set_ylabel("Mean Surface Temperature Change")
-
-        #pn = diff_JJA.plot(x="nav_lon", y="nav_lat", transform=proj, ax=axs[2,1],
-        #        add_colorbar=False)
-        #cb = plt.colorbar(pn, ax=axs[2,1], extend="both")
-        #cb.ax.set_ylabel("Mean Surface Temperature Change")
-
+        # add land 
         for i, ax in enumerate(axs.flatten()):
             ax.add_feature(cfeature.LAND, zorder=100, edgecolor='k')
 
+        # set titles
         for ax in axs[:,0]:
             ax.set_title("DJF")
         for ax in axs[:,1]:
             ax.set_title("JJA")
 
-        plt.show()
-        #plt.savefig(self.save_path + "glosat_temperature_change.png", dpi=600)
+        plt.savefig(self.save_path + f"glosat_{var}_change.png", dpi=600)
         
 
 if __name__ == "__main__":
     gea = glosat_ensemble_analysis()
-    #gea.get_mean_surface_glosat_temperature()
-    gea.plot_mean_surface_glosat_temperature_change()
+    #gea.get_mean_glosat_variable(y0=1940, y1=1960, var="somxl010")
+    #gea.get_mean_glosat_variable(y0=1940, y1=1960, var="tos")
+    gea.plot_mean_glosat_change(var="somxl010", label="Mixed Layer Depth",
+                                unit="m", vmin=0, vmax=500)
     #gea.create_sea_ice_area_sum()
 
     #gea.render_ensemble_sea_ice()
