@@ -3,16 +3,19 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 from dask.diagnostics import ProgressBar
 
-path = '/gws/nopw/j04/verify_oce/NEMO/Preprocessing/DOM/NAARC/'
+path = "/gws/ssde/j25a/verify_oce/NEMO/Preprocessing/DOM/NAARC/"
 
 cfg_path = path + 'domain_cfg_zps.nc'
 cfg = xr.open_dataset(cfg_path, chunks=-1).squeeze()
-top_lev = cfg.top_level.load()
+with ProgressBar():
+    top_lev = cfg.top_level.load()
 
 # get mask
-msk_path = path + 'bdy_msk_pybdy.nc'
+msk_path = path + 'bdy_msk_verify.nc'
 msk = xr.open_dataarray(msk_path, chunks="auto")
 import matplotlib.pyplot as plt
+print (msk)
+print (top_lev)
 
 msk = xr.where((msk == 0) & (top_lev == 1),  -1, top_lev)
 #msk_cut = msk[2660:2790,3765:3933]

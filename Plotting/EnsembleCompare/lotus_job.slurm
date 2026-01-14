@@ -7,4 +7,4 @@
 #SBATCH --account=verify_oce
 source activate verify
 
-python plot_ensemble.py
+python -u plot_ensemble.py
