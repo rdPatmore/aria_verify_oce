@@ -8,6 +8,7 @@ import cartopy.feature as cfeature
 import cmocean
 import matplotlib.colors as mcolors
 import iris
+import xeofs as xe
 
 import os
 import dask
@@ -413,7 +414,7 @@ class glosat_ensemble_analysis(object):
         """ get NAO index """
 
         y0 = 1850
-        y1 = 2014
+        y1 = 2015
 
         year_range = np.arange(y0,y1)
      
@@ -440,8 +441,11 @@ class glosat_ensemble_analysis(object):
                 with ProgressBar():
                     da = xr.DataArray.from_iris(cube).load()
 
-                if 'height' in da.coords:
-                    da = da.drop('height')
+                # remove problematic coordinates
+                drop_coord_list = ["height", "forecast_reference_time"]
+                for coord in drop_coord_list:
+                    if coord in da.coords:
+                        da = da.drop(coord)
 
                 da = self.restrict_to_NA(da)
 
@@ -458,6 +462,41 @@ class glosat_ensemble_analysis(object):
         print (da_djf_series)
         da_djf_series.to_netcdf(self.save_path + f"glosat_NAO_slp_{y0}_{y1}.nc")
 
+    def get_eof(self, ds, fn, time_coord="time"):
+        """ calculate eof of surface data """
+    
+        # initiate eof model
+        # Note: use_coslat should be used to weight but latitude, but xeof
+        # cannot handle 2d latitude variable - it searches for coordinate 
+        # dimensions
+
+        model = xe.single.EOF(n_modes=5)
+    
+        # calculate eof
+        model.fit(ds, dim=time_coord)
+    
+        # save components to netcdf
+        components = model.components(normalized=False)
+        del components.attrs["solver_kwargs"]  # attr causes error
+        components.to_netcdf(f"{self.save_path}/{fn}_eof_abs_components.nc")
+    
+        # save scores to netcdf
+        scores = model.scores(normalized=False)
+        del scores.attrs["solver_kwargs"]  # attr causes error
+        scores.to_netcdf(f"{self.save_path}/{fn}_eof_abs_scores.nc")
+    
+        # save explained variance to netcdf
+        var_exp = model.explained_variance_ratio()
+        del var_exp.attrs["solver_kwargs"]  # attr causes error
+        var_exp.to_netcdf(f"{self.save_path}/{fn}_eof_abs_var_explained_ratio.nc")
+    def get_NAO(self, y0=1850, y1=2014):
+        """ calculate eof based NAO """
+
+        djf_slp = xr.open_dataarray(
+                self.save_path + f"glosat_NAO_slp_{y0}_{y1}.nc")
+        djf_slp = djf_slp.isel(year=slice(3,None))
+        self.get_eof(djf_slp, "NAO", time_coord="year")
+
 if __name__ == "__main__":
 
     # -- Initialise Dask Local Cluster -- #
@@ -473,7 +512,7 @@ if __name__ == "__main__":
 
     gea = glosat_ensemble_analysis()
     #gea.get_mean_NA_var(y0=1850, y1=2014, var="tos", grid_str="T")
-    gea.get_NAO_slp()
+    gea.get_NAO(y0=1850, y1=2014)
     #gea.get_mean_glosat_variable(y0=1940, y1=1960, var="somxl010")
     #gea.get_mean_glosat_variable(y0=1850, y1=1870, var="obvfsq", grid_str="W")
     #gea.get_mean_glosat_variable(y0=1850, y1=1870, var="obvfsq", grid_str="W",
