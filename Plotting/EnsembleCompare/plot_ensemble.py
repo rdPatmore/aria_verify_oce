@@ -420,8 +420,8 @@ class glosat_ensemble_analysis(object):
      
         month_list = ["dec","jan","feb"]
      
-        da_acum, da_djf_acum = [], []
         for year in year_range:
+            da_acum, da_djf_acum = [], []
             for month in month_list:
      
                 print ("year: ", year)
@@ -470,7 +470,7 @@ class glosat_ensemble_analysis(object):
         # cannot handle 2d latitude variable - it searches for coordinate 
         # dimensions
 
-        model = xe.single.EOF(n_modes=5)
+        model = xe.single.EOF(n_modes=5, use_coslat=True)
     
         # calculate eof
         model.fit(ds, dim=time_coord)
@@ -478,17 +478,17 @@ class glosat_ensemble_analysis(object):
         # save components to netcdf
         components = model.components(normalized=False)
         del components.attrs["solver_kwargs"]  # attr causes error
-        components.to_netcdf(f"{self.save_path}/{fn}_eof_abs_components.nc")
+        components.to_netcdf(f"{self.save_path}/{fn}_eof_weighted_abs_components.nc")
     
         # save scores to netcdf
         scores = model.scores(normalized=False)
         del scores.attrs["solver_kwargs"]  # attr causes error
-        scores.to_netcdf(f"{self.save_path}/{fn}_eof_abs_scores.nc")
+        scores.to_netcdf(f"{self.save_path}/{fn}_eof_weighted_abs_scores.nc")
     
         # save explained variance to netcdf
         var_exp = model.explained_variance_ratio()
         del var_exp.attrs["solver_kwargs"]  # attr causes error
-        var_exp.to_netcdf(f"{self.save_path}/{fn}_eof_abs_var_explained_ratio.nc")
+        var_exp.to_netcdf(f"{self.save_path}/{fn}_eof_weighted_abs_var_explained_ratio.nc")
     def get_NAO(self, y0=1850, y1=2014):
         """ calculate eof based NAO """
 
@@ -512,7 +512,8 @@ if __name__ == "__main__":
 
     gea = glosat_ensemble_analysis()
     #gea.get_mean_NA_var(y0=1850, y1=2014, var="tos", grid_str="T")
-    gea.get_NAO(y0=1850, y1=2014)
+    #gea.get_NAO(y0=1850, y1=2014)
+    gea.get_NAO_slp()
     #gea.get_mean_glosat_variable(y0=1940, y1=1960, var="somxl010")
     #gea.get_mean_glosat_variable(y0=1850, y1=1870, var="obvfsq", grid_str="W")
     #gea.get_mean_glosat_variable(y0=1850, y1=1870, var="obvfsq", grid_str="W",
