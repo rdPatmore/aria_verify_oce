@@ -18,7 +18,8 @@ class glosat_ensemble_analysis(object):
     def __init__(self):
         self.glosat_path = "/gws/nopw/j04/glosat/production/UKESM/raw/"
         self.verify_root = "/gws/ssde/j25a/verify_oce/NEMO/"
-        self.save_path = self.verify_root + "PostProcessing/"
+        self.case = "GloSat"
+
         
         self.ensemble_list=["u-ck651",
                             "u-co986",
@@ -28,6 +29,9 @@ class glosat_ensemble_analysis(object):
                             "u-cu102"]
         self.t0_range=["1850","1870"]
         self.t1_range=["1940","1960"]
+        self.save_path = self.verify_root + "PostProcessing/" + self.case + \
+                         "/" + self.ensemble_list[0] + "/"
+        self.plot_path = self.verify_root + "PostProcessing/Plots/" 
 
         dom_path = "Preprocessing/DOM/UKESM/domcfg_UKESM1p1_gdept.nc"
         self.dom_path = self.verify_root + dom_path
@@ -124,6 +128,15 @@ class glosat_ensemble_analysis(object):
         da = da.swap_dims({"time_counter":"time_centered"})
         return da
 
+    def get_mfda(self, paths, var):
+        def preprocess(da):
+            da = da.drop_vars("time_counter")
+            da = da.swap_dims({"time_counter":"time_centered"})
+            return da
+        da = xr.open_mfdataset(paths, preprocess=preprocess,
+                               chunks={"time_counter":1})[var]
+        return da
+
     def get_mld_mid(self, y0, y1):
 
         path_set = []
@@ -202,19 +215,23 @@ class glosat_ensemble_analysis(object):
         plt.subplots_adjust(top=0.95, right=0.85, left=0.01, bottom=0.05,
                             wspace=0.3)
 
-        def render(ax, da, tmin, tmax, cmap, proj, label=""):
-            pn = ax.pcolormesh(da.nav_lon, da.nav_lat, da, transform=proj,
+        def render(ax, da, tmin, tmax, cmap, proj, label="",
+                   style="pcolormesh"):
+            if style == "pcolormesh":
+                pn = ax.pcolormesh(da.nav_lon, da.nav_lat, da.T, transform=proj,
                                vmin=tmin, vmax=tmax, cmap=cmap)
-            #levels = np.linspace(tmin,tmax, 11)
-            #pn = ax.contourf(da.nav_lon, da.nav_lat, da, transform=proj,
-            #                   vmin=tmin, vmax=tmax, cmap=cmap, levels=levels)
+            if style == "contourf":
+                levels = np.linspace(tmin,tmax, 11)
+                pn = ax.contourf(da.nav_lon, da.nav_lat, da.T, transform=proj,
+                               vmin=tmin, vmax=tmax, cmap=cmap, levels=levels)
             cb = plt.colorbar(pn, ax=ax, extend="both")
             cb.ax.set_ylabel(label)
 
         # set colourbar lims and map
         cmap=plt.cm.viridis
         cmap=plt.cm.RdBu_r
-        cmap=plt.cm.binary
+        cmap=cmocean.cm.balance
+        #cmap=plt.cm.binary
 
         # render means
         render(axs[0,0], da_t0_DJF, vmin, vmax, cmap, proj,
@@ -227,19 +244,20 @@ class glosat_ensemble_analysis(object):
                f"{label} 1940-1960")
 
         # set colourbar lims and map
-        tmin, tmax = -0.0001, 0.0001 
+        tmin, tmax = -10, 10
         cmap=cmocean.cm.balance
         
         # render differnces
         render(axs[2,0], diff_DJF, tmin, tmax, cmap, proj,
                f"Mean {label} Change")
-        tmin, tmax = -0.0001, 0.0001 
+        tmin, tmax = -10, 10
         render(axs[2,1], diff_JJA, tmin, tmax, cmap, proj,
                f"Mean {label} Change")
 
         # add land 
         for i, ax in enumerate(axs.flatten()):
-            ax.add_feature(cfeature.LAND, zorder=100, edgecolor='k')
+            ax.add_feature(cfeature.LAND, zorder=100, edgecolor='k',
+                           facecolor="grey")
 
         # set titles
         for ax in axs[:,0]:
@@ -247,62 +265,122 @@ class glosat_ensemble_analysis(object):
         for ax in axs[:,1]:
             ax.set_title("JJA")
 
-        plt.savefig(self.save_path + f"glosat_{var}_change.png", dpi=600)
+        plt.savefig(self.plot_path + 
+                  f"glosat_{self.ensemble_list[0]}_{var}_change.png", dpi=600)
 
-    def barotropic_stream_function(self, y0, y1):
-        """ calculate the barotropic streamfunction  """
+    def get_altantic_mask_glosat(self):
+        """ mask by atlantic """
 
-        path_set = []
-        for y in range(y0, y1):
-            print (y)
-            paths0 = glob.glob(self.glosat_path + self.ensemble_list[0] +
-                                 "/" + str(y) + f"*/*1m_{y}*grid-U.nc")
-            paths1 = glob.glob(self.glosat_path + self.ensemble_list[0] +
-                                 "/" + str(y+1) + f"*/*1m_{y}*grid-U.nc")
-            paths = paths0 + paths1
-            path_set += paths
+        # Define directory path to ancillary files:
+        domain_filepath = \
+            "https://noc-msm-o.s3-ext.jc.rl.ac.uk/npd-eorca1-jra55v1/domain"
+    
+        # Open eORCA1 ocean basin masks:
+        self.atlmsk = xr.open_zarr(f"{domain_filepath}/subbasins",
+                        consolidated=True, chunks={}).atlmsk
+
+    def get_barotropic_stream_function(self, y0, y1, averaging="clim"):
+        """ 
+        calculate the barotropic streamfunction 
+        monthly climatalogical mean over window
+        or annual mean
+        """
+
+        def get_annual_mean_depth_mean():
+
+            y_set = []
+            for y in range(y0, y1):
+                print (y)
+                paths0 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                     "/" + str(y) + f"*/*1m_{y}*grid-V.nc")
+                paths1 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                     "/" + str(y+1) + f"*/*1m_{y}*grid-V.nc")
+                year_paths = paths0 + paths1
+
+                vvel_series = self.get_mfda(year_paths, "vo")
+                e3v_series = self.get_mfda(year_paths, "thkcello")
+
+                depth_weight_vvel_series = vvel_series * e3v_series
+
+                baroV = depth_weight_vvel_series.sum(dim="depthv") 
+                baroV_mean = baroV.mean("time_centered")
+                baroV_mean = baroV_mean.expand_dims(year=[y])
+                y_set.append(baroV_mean)
+
+            with ProgressBar():
+                baroV_mean_set = xr.concat(y_set, "year").load()
+
+            return baroV_mean_set
+
+        def get_clim_mean_depth_mean():
+
+            path_set = []
+            for y in range(y0, y1):
+                paths0 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                     "/" + str(y) + f"*/*1m_{y}*grid-V.nc")
+                paths1 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                     "/" + str(y+1) + f"*/*1m_{y}*grid-V.nc")
+                year_paths = paths0 + paths1
+                path_set += year_paths
+
+            vvel_series = self.get_da(path_set[0], "vo")
+            for path in path_set[1:]:
+                print (path)
+                vvel = self.get_da(path, "vo")
+                vvel_series = xr.concat([vvel_series, vvel],
+                        dim="time_centered")
+
+            e3v_series = self.get_da(path_set[0], "thkcello")
+            for path in path_set[1:]:
+                e3v = self.get_da(path, "thkcello")
+                e3v_series = xr.concat([e3v_series, e3v], dim="time_centered")
+
+            # set averaging type
+            ave_typ = "time_centered.month"
+
+            with ProgressBar():
+                vvel_mean = vvel_series.groupby(ave_typ).mean().load()
+                e3v_mean = e3v_series.groupby(ave_typ).mean().load()
+
+            depth_weight_vvel = vvel_mean * e3v_mean
+            baroV = depth_weight_vvel.sum(dim="depthv") 
+
+            return depth_int_vvel
+
+        if averaging == "clim":
+            baroV = get_clim_mean_depth_mean()
+        if averaging == "annual":
+            baroV = get_annual_mean_depth_mean() 
 
         # get depth integrated velocities
         domcfg = xr.open_dataset(self.dom_path, chunks="auto").squeeze()
-        e3u = domcfg.e3u
-        e3u = e3u.assign_coords({"nav_lon":domcfg.glamu,
-                                 "nav_lat":domcfg.gphiu})
-        e2u = domcfg.e2u
-        e2u = e2u.assign_coords({"nav_lon":domcfg.glamu,
+        #e3v = domcfg.e3v
+        #e3v = e3v.assign_coords({"nav_lon":domcfg.glamu,
+        #                         "nav_lat":domcfg.gphiu})
+        e1v = domcfg.e1v
+        e1v = e1v.assign_coords({"nav_lon":domcfg.glamu,
                                  "nav_lat":domcfg.gphiu})
         #e1u = e1u.where(domcfg.top_level == 1)
 
-        uvel_series = self.get_da(path_set[0], "uo")
-        for path in path_set[1:]:
-            uvel = self.get_da(path, "uo")
-            uvel_series = xr.concat([uvel_series, uvel], dim="time_centered")
+        baroV = baroV.stack(a=["x","y"])
+        e1v = e1v.stack(a=["x","y"])
 
-        e3u_series = self.get_da(path_set[0], "thkcello")
-        for path in path_set[1:]:
-            e3u = self.get_da(path, "thkcello")
-            e3u_series = xr.concat([e3u_series, e3u], dim="time_centered")
+        baroU, e1v = xr.align(baroV, e1v)
 
-        with ProgressBar():
-            uvel_mean = uvel_series.groupby("time_centered.month").mean().load()
-            e3u_mean = e3u_series.groupby("time_centered.month").mean().load()
+        e1v = e1v.unstack("a")
+        baroV = baroV.unstack("a")
 
-        transport = uvel_mean * e3u_mean
+        transport = ( baroV * e1v ).sortby("x",
+                                     ascending=False).cumsum(dim="x")/1e6
 
+        BSF_masked = transport.sortby("x").where(domcfg.top_level == 1)
 
-        baroU = transport.sum(dim="depthu") 
-        baroU = baroU.stack(a=["x","y"])
-        e2u = e2u.stack(a=["x","y"])
-
-        baroU, e2u = xr.align(baroU, e2u)
-
-        e2u = e2u.unstack("a")
-        baroU = baroU.unstack("a")
-
-        BSF = ( baroU * e2u ).sortby("y", ascending=False).cumsum(dim="y")/1e6
-        BSF_masked = BSF.sortby("y").where(domcfg.top_level == 1)
+        BSF_masked = BSF_masked.assign_coords({"nav_lon":domcfg.nav_lon,
+                                               "nav_lat":domcfg.nav_lat})
 
         BSF_masked.name = "BSF"
-        BSF.to_netcdf(self.save_path + f"glosat_mean_BSF_{y0}_{y1}.nc")
+        BSF_masked.to_netcdf(self.save_path + 
+                             f"glosat_{averaging}_mean_BSF_{y0}_{y1}.nc")
 
     def get_AMOC(self, path):
         da = xr.open_dataset(path, chunks={"time_counter":1}, 
@@ -420,8 +498,9 @@ class glosat_ensemble_analysis(object):
      
         month_list = ["dec","jan","feb"]
      
+        da_djf_acum = []
         for year in year_range:
-            da_acum, da_djf_acum = [], []
+            da_acum = [] 
             for month in month_list:
      
                 print ("year: ", year)
@@ -489,7 +568,7 @@ class glosat_ensemble_analysis(object):
         var_exp = model.explained_variance_ratio()
         del var_exp.attrs["solver_kwargs"]  # attr causes error
         var_exp.to_netcdf(f"{self.save_path}/{fn}_eof_weighted_abs_var_explained_ratio.nc")
-    def get_NAO(self, y0=1850, y1=2014):
+    def get_NAO(self, y0=1850, y1=2015):
         """ calculate eof based NAO """
 
         djf_slp = xr.open_dataarray(
@@ -512,17 +591,17 @@ if __name__ == "__main__":
 
     gea = glosat_ensemble_analysis()
     #gea.get_mean_NA_var(y0=1850, y1=2014, var="tos", grid_str="T")
-    #gea.get_NAO(y0=1850, y1=2014)
-    gea.get_NAO_slp()
-    #gea.get_mean_glosat_variable(y0=1940, y1=1960, var="somxl010")
+    #gea.get_NAO(y0=1850, y1=2015)
+    #gea.get_NAO_slp()
     #gea.get_mean_glosat_variable(y0=1850, y1=1870, var="obvfsq", grid_str="W")
     #gea.get_mean_glosat_variable(y0=1850, y1=1870, var="obvfsq", grid_str="W",
     #                             mld_mid=True)
-    #gea.plot_mean_glosat_change(var="obvfsq", label=r"N$^2$",
-    #                            unit=r"s$^{-1}$", vmin=0.0, vmax=0.001)
+    #gea.plot_mean_glosat_change(var="BSF", label=r"BSF",
+    #                            unit="Sv", vmin=-50.0, vmax=50)
     #gea.plot_meridional_overturning_timeseries(y0=1850,y1=2014)
-    #gea.barotropic_stream_function(y0=1850, y1=1870)
-    #gea.barotropic_stream_function(y0=1940, y1=1960)
+    gea.get_barotropic_stream_function(y0=1850, y1=2015, averaging="annual")
+    
+    #gea.get_barotropic_stream_function(y0=1940, y1=1960)
     #gea.create_sea_ice_area_sum()
 
     #gea.render_ensemble_sea_ice()
