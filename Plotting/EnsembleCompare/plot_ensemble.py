@@ -9,6 +9,7 @@ import cmocean
 import matplotlib.colors as mcolors
 import iris
 import xeofs as xe
+from scipy import stats
 
 import os
 import dask
@@ -62,7 +63,9 @@ class glosat_ensemble_analysis(object):
                 print (path)
                 try:
                     ds = xr.open_dataset(path, chunks="auto",
-                                 decode_times=False)
+                                 decode_times=False).load()
+                    self.restrict_to_NA(ds, domain="seaice", drop=True)
+                    print (ds)
                     times.append(ds.aice.sum(["nj","ni"]))
                 except Exception as e:
                     print (e)
@@ -76,7 +79,8 @@ class glosat_ensemble_analysis(object):
         ds_all = xr.concat(ensemble_datasets, "ensemble")
         
         with ProgressBar():
-            ds_all.to_netcdf(self.save_path + "glosat_sea_ice_area_ensemble.nc")
+            ds_all.to_netcdf(self.save_path + 
+                    "glosat_sea_ice_area_ensemble_NA.nc")
 
     def render_ensemble_sea_ice(self):
         ds = xr.open_dataset(self.save_path + "glosat_sea_ice_area_ensemble.nc",
@@ -134,7 +138,7 @@ class glosat_ensemble_analysis(object):
             da = da.swap_dims({"time_counter":"time_centered"})
             return da
         da = xr.open_mfdataset(paths, preprocess=preprocess,
-                               chunks={"time_counter":1})[var]
+                           chunks={"time_counter":1})[var]
         return da
 
     def get_mld_mid(self, y0, y1):
@@ -268,6 +272,73 @@ class glosat_ensemble_analysis(object):
         plt.savefig(self.plot_path + 
                   f"glosat_{self.ensemble_list[0]}_{var}_change.png", dpi=600)
 
+    def plot_mean_glosat_change_difference_only(self, 
+            var, label, unit, slim, wlim):
+        """ render differernce between time periods """
+
+        # get datasets
+        da_t0 = xr.open_dataarray(self.save_path + f"glosat_mean_{var}_" + 
+                              self.t0_range[0] + "_" + self.t0_range[1] + ".nc")
+        da_t1 = xr.open_dataarray(self.save_path + f"glosat_mean_{var}_" + 
+                              self.t1_range[0] + "_" + self.t1_range[1] + ".nc")
+
+        # get seasonal means
+        da_t0_DJF = da_t0.sel(month=[1,2,12]).mean("month")
+        da_t1_DJF = da_t1.sel(month=[1,2,12]).mean("month")
+        da_t0_JJA = da_t0.sel(month=[6,7,8]).mean("month")
+        da_t1_JJA = da_t1.sel(month=[6,7,8]).mean("month")
+
+        # get differences
+        diff_DJF = da_t1_DJF - da_t0_DJF
+        diff_JJA = da_t1_JJA - da_t0_JJA
+
+        # initialise figure
+        proj = ccrs.PlateCarree()
+        proj_dict={"projection":ccrs.Orthographic(-30,60)}
+        #proj_dict={"projection":ccrs.PlateCarree()}
+        fig, axs = plt.subplots(1,2, figsize=(6.5,4.5), subplot_kw=proj_dict)
+        plt.subplots_adjust(top=0.90, right=0.98, left=0.02, bottom=0.05,
+                            wspace=0.05)
+
+        def render(ax, da, tmin, tmax, cmap, proj, label="",
+                   style="pcolormesh"):
+            if style == "pcolormesh":
+                pn = ax.pcolormesh(da.nav_lon, da.nav_lat, da, transform=proj,
+                               vmin=tmin, vmax=tmax, cmap=cmap)
+            if style == "contourf":
+                levels = np.linspace(tmin,tmax, 11)
+                pn = ax.contourf(da.nav_lon, da.nav_lat, da, transform=proj,
+                               vmin=tmin, vmax=tmax, cmap=cmap, levels=levels)
+            cb = plt.colorbar(pn, ax=ax, extend="both", location="bottom",
+                             pad=0.05)
+            cb.ax.set_xlabel(label)
+
+        # set colourbar lims and map
+        wmin, wmax = -wlim, wlim
+        smin, smax = -slim, slim
+        cmap=cmocean.cm.balance
+        
+        # render differnces
+        render(axs[0], diff_DJF, wmin, wmax, cmap, proj,
+               f"Mean {label} Change ({unit})")
+        render(axs[1], diff_JJA, smin, smax, cmap, proj,
+               f"Mean {label} Change ({unit})")
+
+        # add land 
+        for i, ax in enumerate(axs.flatten()):
+            ax.add_feature(cfeature.LAND, zorder=100, edgecolor='k',
+                           facecolor="grey")
+
+        # set titles
+        axs[0].set_title("DJF")
+        axs[1].set_title("JJA")
+
+        plt.savefig(self.plot_path + 
+           f"glosat_{self.ensemble_list[0]}_{var}_change_difference_only.png", 
+                  dpi=600)
+
+
+
     def get_altantic_mask_glosat(self):
         """ mask by atlantic """
 
@@ -382,6 +453,246 @@ class glosat_ensemble_analysis(object):
         BSF_masked.to_netcdf(self.save_path + 
                              f"glosat_{averaging}_mean_BSF_{y0}_{y1}.nc")
 
+    def plot_BSF_and_AMOC_single_ensemble(self):
+        """ plot timeseries of BSF and AMOC over spg """
+
+        # get data
+        BSF = xr.open_dataarray(self.save_path +
+                             "glosat_annual_mean_BSF_1850_2015.nc")
+        AMOC_ensemble = xr.open_dataarray(self.save_path +
+                             "glosat_AMOC_1850_2014.nc")
+        AMOC = AMOC_ensemble.isel(ensemble=0)
+
+        # get nao
+        NAO = xr.open_dataarray(
+                    f"{self.save_path}/NAO_eof_weighted_abs_scores.nc"
+                    ).isel(mode=0)
+
+        TAU = xr.open_dataarray(self.save_path +
+                                 "glosat_tau_curl_1850_2015.nc")
+        TOS = xr.open_dataarray(self.save_path +
+                                 "glosat_tos_1850_2015_date_err.nc")
+
+        # set time units
+        TOS["time_counter"] = [np.datetime64(str(int(y)), "Y") for y in TAU.year]
+        TOS = TOS.rename({"time_counter":"year"})
+        TAU["year"] = [np.datetime64(str(int(y)), "Y") for y in TAU.year]
+        NAO["year"] = [np.datetime64(str(int(y)), "Y") for y in NAO.year]
+        BSF["year"] = [np.datetime64(str(int(y)), "Y") for y in BSF.year]
+        AMOC["time_centered"] = [np.datetime64(str(m.values), "M") 
+                                 for m in AMOC.time_centered]
+        
+        # find SPG and NAG max
+        BSF_na = self.restrict_to_NA(BSF, domain="ocean")
+        TAU_na = self.restrict_to_NA(TAU, domain="ocean")
+        TOS_na = self.restrict_to_NA(TOS, domain="ocean")
+        TAU_na = TAU_na.where(BSF_na.isel(x=slice(None,-1),
+                                          y=slice(None,None)) > 10)
+        TOS_na = TOS_na.where(BSF_na > 10)
+        
+        ## get SPG by mode (fixed position)
+        #SPG_ind = BSF_na.argmax(["x","y"])
+        #SPG_lon_mode = stats.mode(SPG_ind["x"]).mode
+        #SPG_lat_mode = stats.mode(BSF_na.isel(x=SPG_lon_mode).argmax("y")).mode
+        #SPG_alt = np.abs(BSF_na.isel(x=SPG_lon_mode,y=SPG_lat_mode))
+
+        ## get NAG by mode (fixed position)
+        #NAG_ind = BSF_na.argmin(["x","y"])
+        #NAG_lon_mode = stats.mode(NAG_ind["x"]).mode
+        #NAG_lat_mode = stats.mode(BSF_na.isel(x=NAG_lon_mode).argmin("y")).mode
+        #NAG_alt = np.abs(BSF_na.isel(x=NAG_lon_mode,y=NAG_lat_mode))
+
+        # get SPG and NAG max (moving position)
+        SPG = BSF_na.max(["x","y"])
+        NAG = np.abs(BSF_na.min(["x","y"]))
+
+        #TAU = np.abs(TAU_na.isel(x=SPG_lon_mode,y=SPG_lat_mode))
+        #TOS = np.abs(TOS_na.isel(x=SPG_lon_mode,y=SPG_lat_mode))
+        TOS = TOS_na.mean(["x","y"])
+        TAU = TAU_na.mean(["x","y"])
+        
+        # rolling mean AMOC
+        AMOC = AMOC.rolling(time_centered=12, center=True).mean()
+
+        # rolling mean NAO
+        NAO = NAO / np.abs(NAO.max())
+        NAO_rolling = NAO.rolling(year=5, center=True).mean()
+
+        # add linear fit
+        def fit_dim(da, dim, deg=1):
+            p = da.polyfit(dim=dim, deg=deg)
+            fit = xr.polyval(da[dim], p.polyfit_coefficients)
+            return da-fit, fit
+
+        AMOC_detrended, AMOC_fit = fit_dim(AMOC, "time_centered")
+        SPG_detrended, SPG_fit = fit_dim(SPG, "year")
+        NAG_detrended, NAG_fit = fit_dim(NAG, "year")
+        TOS_detrended, TOS_fit = fit_dim(TOS, "year")
+        TAU_detrended, TAU_fit = fit_dim(TAU, "year")
+
+        # rolling window correlation
+        def rolling_window_correlation(lag, ww):
+            SPG_roll = SPG_detrended.rolling(year=ww, center=True).construct("window")
+            NAO_roll = NAO_rolling.rolling(year=ww, center=True).construct("window")
+            
+            if lag != 0:
+                x1 = NAO_roll.isel(window=slice(0, -lag))
+                x2 = SPG_roll.isel(window=slice(lag, None))
+            else:
+                x1 = NAO_roll
+                x2 = SPG_roll
+            
+            #x1 = x1.isel(year=slice(ww, None))
+            #x2 = x2.isel(year=slice(ww, None)) 
+            
+            
+            rac = xr.corr(x2, x1, dim="window")
+            return rac
+
+        fig, axs = plt.subplots(6, figsize=(6.5,8))
+        plt.subplots_adjust(left=0.15, top=0.98, right=0.82, bottom=0.08)
+        for lag in range(1,4):
+            rac = rolling_window_correlation(lag, 20)
+            axs[4].plot(rac.year.dt.year, rac, label=str(lag))
+        axs[4].set_ylim(-1,1)
+        axs[4].axhline()
+        axs[4].set_ylabel("NAO-SPG\nlag corr")
+
+        # plot positions
+        #SPG_ind = BSF_na.argmin(["x","y"])
+        #plt.scatter(BSF_na.x[SPG_ind["x"]], BSF_na.y[SPG_ind["y"]].data)
+        print (AMOC.time_centered)
+        print (AMOC.time_centered.dt.year)
+
+
+        axs[0].plot(TOS.year.dt.year, TOS)
+        axs[0].plot(TOS_fit.year.dt.year, TOS_fit, c="k")
+        axs[0].set_ylabel("SPG surface\ntemperature\n" + r"(${^\circ}$C)")
+        axs[1].plot(AMOC.time_centered, AMOC)
+        axs[1].plot(AMOC_fit.time_centered, AMOC_fit, c="k")
+        axs[1].set_ylabel("AMOC\nTransport\n(Sv)")
+        axs[2].plot(NAG.year.dt.year, NAG, label="NAG")
+        axs[2].plot(SPG.year.dt.year, SPG, label="SPG")
+        axs[2].plot(NAG_fit.year.dt.year, NAG_fit, c="k")
+        axs[2].plot(SPG_fit.year.dt.year, SPG_fit, c="k")
+        axs[2].set_ylabel("Gyre\nTransport\n(Sv)")
+        #axs[2].bar(NAO.year, NAO.where(NAO <0))
+        #axs[2].bar(NAO.year, NAO.where(NAO >0))
+        print (NAO.year.dt.year)
+        axs[3].bar(NAO.year.dt.year, NAO, tick_label=NAO.year)
+        axs[3].plot(NAO_rolling.year.dt.year, NAO_rolling , c='k')
+        axs[3].set_ylabel("NAO")
+        axs[3].set_xticks(np.arange(1850,2014,20))
+        axs[5].plot(TAU.year.dt.year, TAU )
+        axs[5].plot(TAU_fit.year.dt.year, TAU_fit, c='k')
+        axs[5].set_ylabel("SPG Wind\nStress Curl\n"  + r"(N m$^{-3}$)")
+        for ax in axs[2:]:
+            ax.set_xlim(1850,2014)
+        axs[0].set_xlim(1850,2014)
+        axs[1].set_xlim(AMOC.time_centered.min(),AMOC.time_centered.max())
+        for ax in axs[:5]:
+            ax.set_xticklabels([])
+
+        axs[-1].set_xlabel("Year")
+
+        axs[2].legend(bbox_to_anchor=[1.01,1.05])
+        axs[4].legend(bbox_to_anchor=[1.01,1.05], title="lag (years)")
+        plt.savefig(self.save_path + "timeseries_master.png", dpi=1200)
+
+    def curl(self, domcfg, u, v):
+
+        dx = domcfg.e1t
+        dy = domcfg.e2t
+        area = (domcfg.e1f * domcfg.e2f).isel(x=slice(None,-1),
+                                              y=slice(None,-1))
+        u = u.isel(x=slice(1,-1), y=slice(None,-1))                
+        v = v.isel(x=slice(1,-1), y=slice(None,-1))                
+
+        print (u.shape)
+        print (v.shape)
+        udx = (u * dx).diff("y", label="lower")
+        vdy = (v * dy).diff("x", label="lower")
+        print (udx.shape)
+        print (vdy.shape)
+        
+        udx = udx.isel(x=slice(None,-1))
+        vdy = vdy.isel(y=slice(None,-1))
+
+        curl = (-udx + vdy) / area
+
+        return curl
+
+    def get_wind_stress_curl(self, y0, y1):
+        """ get_wind_stress_curl """
+
+     
+        domcfg = xr.open_dataset(self.dom_path, chunks="auto").squeeze()
+
+        domcfg = domcfg.assign_coords({"nav_lon":domcfg.glamu,
+                                       "nav_lat":domcfg.gphiu})
+
+        y_set = []
+        for y in range(y0, y1):
+            print (y)
+            paths0 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                 "/" + str(y) + f"*/*1m_{y}*grid-V.nc")
+            paths1 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                 "/" + str(y+1) + f"*/*1m_{y}*grid-V.nc")
+            year_paths = paths0 + paths1
+            tauv_series = self.get_mfda(year_paths, "tauvo")
+
+            paths0 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                 "/" + str(y) + f"*/*1m_{y}*grid-U.nc")
+            paths1 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                 "/" + str(y+1) + f"*/*1m_{y}*grid-U.nc")
+            year_paths = paths0 + paths1
+            tauu_series = self.get_mfda(year_paths, "tauuo")
+
+            with ProgressBar():
+                tauu_mean = tauu_series.mean("time_centered").load()
+                tauv_mean = tauv_series.mean("time_centered").load()
+
+            #tauu_mean = self.restrict_to_NA(tauu_mean, ocean=True, drop=False)
+            #tauv_mean = self.restrict_to_NA(tauv_mean, ocean=True, drop=False)
+
+            # get curl
+            tau_curl = self.curl(domcfg, tauu_mean, tauv_mean)
+
+            tau_curl = tau_curl.expand_dims(year=[y])
+
+            y_set.append(tau_curl)
+
+        tau_series = xr.concat(y_set, "year")
+
+        tau_series.name = "tau_curl"
+
+        tau_series.to_netcdf(self.save_path + f"glosat_tau_curl_{y0}_{y1}.nc")
+
+    def get_surface_annual_mean_temperature(self, y0, y1):
+
+        y_set = []
+        for y in range(y0, y1):
+            print (y)
+            paths0 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                 "/" + str(y) + f"*/*1m_{y}*grid-T.nc")
+            paths1 = glob.glob(self.glosat_path + self.ensemble_list[0] +
+                                 "/" + str(y+1) + f"*/*1m_{y}*grid-T.nc")
+            year_paths = paths0 + paths1
+            temp_series = self.get_mfda(year_paths, "tos")
+
+            with ProgressBar():
+                temp_mean = temp_series.mean("time_centered").load()
+
+            temp_mean = temp_mean.expand_dims(year=[y])
+
+            y_set.append(temp_mean)
+
+        temp_series = xr.concat(y_set, "year")
+
+        temp_series.name = "tos"
+
+        temp_series.to_netcdf(self.save_path + f"glosat_tos_{y0}_{y1}.nc")
+
     def get_AMOC(self, path):
         da = xr.open_dataset(path, chunks={"time_counter":1}, 
                 decode_times=False)["zomsfatl"]
@@ -446,18 +757,37 @@ class glosat_ensemble_analysis(object):
         
         plt.savefig("AMOC.png",dpi=600)
     
-    def restrict_to_NA(self, da):
+    def restrict_to_NA(self, da, domain="ocean", drop=True):
         """ restrict lat and lon on NAO definition """
 
-        lat_lims = slice(20,70)
-        lon_lims = slice(-90,40)
+        if domain == "ocean":
+            lat_lims = [26,70]
+            lon_lims = [-90,40]
 
-        # rebase lon
-        da["longitude"] = xr.where(da.longitude > 180, da.longitude - 360,
-                                   da.longitude)
-        da = da.sortby("longitude")
+            da = da.where((da.nav_lon > lon_lims[0]) &
+                          (da.nav_lon < lon_lims[1]) &
+                          (da.nav_lat > lat_lims[0]) &
+                          (da.nav_lat < lat_lims[1]), drop=drop)
 
-        da = da.sel(longitude=lon_lims, latitude=lat_lims)
+        elif domain == "seaice":
+            lat_lims = [26,70]
+            lon_lims = [-90,40]
+
+            da = da.where((da.TLON > lon_lims[0]) &
+                          (da.TLON < lon_lims[1]) &
+                          (da.TLAT > lat_lims[0]) &
+                          (da.TLAT < lat_lims[1]), drop=drop)
+
+        else:
+            lat_lims = slice(20,70)
+            lon_lims = slice(-90,40)
+
+            # rebase lon
+            da["longitude"] = xr.where(da.longitude > 180, da.longitude - 360,
+                                       da.longitude)
+            da = da.sortby("longitude")
+
+            da = da.sel(longitude=lon_lims, latitude=lat_lims)
 
         return da
 
@@ -596,10 +926,16 @@ if __name__ == "__main__":
     #gea.get_mean_glosat_variable(y0=1850, y1=1870, var="obvfsq", grid_str="W")
     #gea.get_mean_glosat_variable(y0=1850, y1=1870, var="obvfsq", grid_str="W",
     #                             mld_mid=True)
-    #gea.plot_mean_glosat_change(var="BSF", label=r"BSF",
-    #                            unit="Sv", vmin=-50.0, vmax=50)
+    gea.plot_mean_glosat_change_difference_only(var="somxl010", 
+                                 label="Mixed Layer Depth",
+                                unit="m", slim=15, wlim=200)
+    gea.plot_mean_glosat_change_difference_only(var="tos",
+                             label="Surface Temperature",
+                                unit=r"$^{\circ}$C", slim=2.5, wlim=2.5)
     #gea.plot_meridional_overturning_timeseries(y0=1850,y1=2014)
-    gea.get_barotropic_stream_function(y0=1850, y1=2015, averaging="annual")
+    #gea.get_barotropic_stream_function(y0=1850, y1=2015, averaging="annual")
+    #gea.get_surface_annual_mean_temperature(y0=1850, y1=2015)
+    #gea.plot_BSF_and_AMOC_single_ensemble()
     
     #gea.get_barotropic_stream_function(y0=1940, y1=1960)
     #gea.create_sea_ice_area_sum()
