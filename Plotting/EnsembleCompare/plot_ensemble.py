@@ -10,6 +10,7 @@ import matplotlib.colors as mcolors
 import iris
 import xeofs as xe
 from scipy import stats
+import matplotlib.gridspec as gridspec
 
 import os
 import dask
@@ -517,6 +518,7 @@ class glosat_ensemble_analysis(object):
         # rolling mean NAO
         NAO = NAO / np.abs(NAO.max())
         NAO_rolling = NAO.rolling(year=5, center=True).mean()
+        SPG_rolling = SPG.rolling(year=5, center=True).mean()
 
         # add linear fit
         def fit_dim(da, dim, deg=1):
@@ -525,78 +527,122 @@ class glosat_ensemble_analysis(object):
             return da-fit, fit
 
         AMOC_detrended, AMOC_fit = fit_dim(AMOC, "time_centered")
-        SPG_detrended, SPG_fit = fit_dim(SPG, "year")
+        SPG_detrended, SPG_fit = fit_dim(SPG_rolling, "year")
         NAG_detrended, NAG_fit = fit_dim(NAG, "year")
         TOS_detrended, TOS_fit = fit_dim(TOS, "year")
         TAU_detrended, TAU_fit = fit_dim(TAU, "year")
 
         # rolling window correlation
-        def rolling_window_correlation(lag, ww):
-            SPG_roll = SPG_detrended.rolling(year=ww, center=True).construct("window")
-            NAO_roll = NAO_rolling.rolling(year=ww, center=True).construct("window")
+        def rolling_window_correlation(lag, ww, da0, da1, time_var):
+            kwargs = {time_var:ww, "center":True}
+            da0 = da0.rolling(**kwargs).construct("window")
+            da1 = da1.rolling(**kwargs).construct("window")
             
             if lag != 0:
-                x1 = NAO_roll.isel(window=slice(0, -lag))
-                x2 = SPG_roll.isel(window=slice(lag, None))
+                x1 = da0.isel(window=slice(lag, None))
+                x2 = da1.isel(window=slice(0, -lag))
             else:
-                x1 = NAO_roll
-                x2 = SPG_roll
+                x1 = da0
+                x2 = da1
             
             #x1 = x1.isel(year=slice(ww, None))
             #x2 = x2.isel(year=slice(ww, None)) 
             
             
-            rac = xr.corr(x2, x1, dim="window")
+            rac = xr.corr(x1, x2, dim="window")
             return rac
 
-        fig, axs = plt.subplots(6, figsize=(6.5,8))
-        plt.subplots_adjust(left=0.15, top=0.98, right=0.82, bottom=0.08)
-        for lag in range(1,4):
-            rac = rolling_window_correlation(lag, 20)
-            axs[4].plot(rac.year.dt.year, rac, label=str(lag))
-        axs[4].set_ylim(-1,1)
-        axs[4].axhline()
-        axs[4].set_ylabel("NAO-SPG\nlag corr")
+        def rolling_correlation(lag, da0, da1, time_var):
+            """ rolling correlation of entire time series """
+
+            da1_shifted = da1.shift({time_var:lag})
+            corr = xr.corr(da0, da1_shifted, dim=time_var)
+
+            return corr
+
+        #fig, axs = plt.subplots(6, figsize=(6.5,10))
+        #plt.subplots_adjust(left=0.15, top=0.98, right=0.82, bottom=0.08,
+        #                    hspace=0.32)
+
+        # initialise figure
+        fig = plt.figure(figsize=(6.5,8))
+
+        # initialise gridspec
+        gs0 = gridspec.GridSpec(ncols=1, nrows=5)
+        gs1 = gridspec.GridSpec(ncols=1, nrows=1)
+
+        # set frame bounds
+        gs0.update(left=0.15, top=0.98, right=0.82, bottom=0.26,
+                            hspace=0.2)
+        gs1.update(left=0.15, top=0.2, right=0.82, bottom=0.08,
+                            hspace=0.2)
+
+        # assign axes to lists
+        axs0, axs1 = [], []
+        for i in range(5):
+            axs0.append(fig.add_subplot(gs0[i]))
+        axs1.append(fig.add_subplot(gs1[0]))
+
+        corr_list = []
+        for lag in range(10):
+            corr = rolling_window_correlation(lag, 50, SPG_detrended,
+                                              NAO_rolling, "year")
+            corr = corr.expand_dims(lag=[lag])
+            print (corr.data)
+            corr_list.append(corr)
+        corr_lags = xr.concat(corr_list, "lag")
+        # bootstrap lag
+        time_len = len(corr_lags.year)
+        rand_idx = np.random.randint(time_len, size=time_len*10)
+        rand_sampled = corr_lags.isel(year=rand_idx) 
+        corr_lags_bs = rand_sampled.quantile([0.05,0.5,0.95], "year")
+        print(corr_lags_bs)
+        axs1[0].fill_between(corr_lags_bs.lag, 
+                           corr_lags_bs.sel(quantile=0.05),
+                           corr_lags_bs.sel(quantile=0.95), alpha=0.4)
+        axs1[0].plot(corr_lags_bs.lag, corr_lags_bs.sel(quantile=0.5))
+        axs1[0].set_ylim(-1,1)
+        axs1[0].set_xlim(0,9)
+        axs1[0].set_xlabel("Lag (years)")
+        axs1[0].axhline(c="k", lw=1.0)
+        axs1[0].set_ylabel("Bootstrapped\nNAO-SPG\nlag corr")
 
         # plot positions
         #SPG_ind = BSF_na.argmin(["x","y"])
         #plt.scatter(BSF_na.x[SPG_ind["x"]], BSF_na.y[SPG_ind["y"]].data)
-        print (AMOC.time_centered)
-        print (AMOC.time_centered.dt.year)
 
 
-        axs[0].plot(TOS.year.dt.year, TOS)
-        axs[0].plot(TOS_fit.year.dt.year, TOS_fit, c="k")
-        axs[0].set_ylabel("SPG surface\ntemperature\n" + r"(${^\circ}$C)")
-        axs[1].plot(AMOC.time_centered, AMOC)
-        axs[1].plot(AMOC_fit.time_centered, AMOC_fit, c="k")
-        axs[1].set_ylabel("AMOC\nTransport\n(Sv)")
-        axs[2].plot(NAG.year.dt.year, NAG, label="NAG")
-        axs[2].plot(SPG.year.dt.year, SPG, label="SPG")
-        axs[2].plot(NAG_fit.year.dt.year, NAG_fit, c="k")
-        axs[2].plot(SPG_fit.year.dt.year, SPG_fit, c="k")
-        axs[2].set_ylabel("Gyre\nTransport\n(Sv)")
+        axs0[0].plot(TOS_fit.year.dt.year, TOS_fit, c="k")
+        axs0[0].plot(TOS.year.dt.year, TOS)
+        axs0[0].set_ylabel("SPG surface\ntemperature\n" + r"(${^\circ}$C)")
+        axs0[1].plot(AMOC_fit.time_centered, AMOC_fit, c="k")
+        axs0[1].plot(AMOC.time_centered, AMOC)
+        axs0[1].set_ylabel("AMOC\nTransport\n(Sv)")
+        axs0[2].plot(NAG_fit.year.dt.year, NAG_fit, c="k")
+        axs0[2].plot(SPG_fit.year.dt.year, SPG_fit, c="k")
+        axs0[2].plot(NAG.year.dt.year, NAG, label="NAG")
+        axs0[2].plot(SPG.year.dt.year, SPG, label="SPG")
+        axs0[2].set_ylabel("Gyre\nTransport\n(Sv)")
         #axs[2].bar(NAO.year, NAO.where(NAO <0))
         #axs[2].bar(NAO.year, NAO.where(NAO >0))
         print (NAO.year.dt.year)
-        axs[3].bar(NAO.year.dt.year, NAO, tick_label=NAO.year)
-        axs[3].plot(NAO_rolling.year.dt.year, NAO_rolling , c='k')
-        axs[3].set_ylabel("NAO")
-        axs[3].set_xticks(np.arange(1850,2014,20))
-        axs[5].plot(TAU.year.dt.year, TAU )
-        axs[5].plot(TAU_fit.year.dt.year, TAU_fit, c='k')
-        axs[5].set_ylabel("SPG Wind\nStress Curl\n"  + r"(N m$^{-3}$)")
-        for ax in axs[2:]:
+        axs0[3].plot(NAO_rolling.year.dt.year, NAO_rolling , c='k')
+        axs0[3].bar(NAO.year.dt.year, NAO, tick_label=NAO.year)
+        axs0[3].set_ylabel("NAO")
+        axs0[3].set_xticks(np.arange(1850,2014,20))
+        axs0[4].plot(TAU_fit.year.dt.year, TAU_fit, c='k')
+        axs0[4].plot(TAU.year.dt.year, TAU )
+        axs0[4].set_ylabel("SPG Wind\nStress Curl\n"  + r"(N m$^{-3}$)")
+        for ax in axs0:
             ax.set_xlim(1850,2014)
-        axs[0].set_xlim(1850,2014)
-        axs[1].set_xlim(AMOC.time_centered.min(),AMOC.time_centered.max())
-        for ax in axs[:5]:
+        axs0[0].set_xlim(1850,2014)
+        axs0[1].set_xlim(AMOC.time_centered.min(),AMOC.time_centered.max())
+        for ax in axs0[:4]:
             ax.set_xticklabels([])
 
-        axs[-1].set_xlabel("Year")
+        axs0[-1].set_xlabel("Year")
 
-        axs[2].legend(bbox_to_anchor=[1.01,1.05])
-        axs[4].legend(bbox_to_anchor=[1.01,1.05], title="lag (years)")
+        axs0[2].legend(bbox_to_anchor=[1.01,1.05])
         plt.savefig(self.save_path + "timeseries_master.png", dpi=1200)
 
     def curl(self, domcfg, u, v):
@@ -926,16 +972,16 @@ if __name__ == "__main__":
     #gea.get_mean_glosat_variable(y0=1850, y1=1870, var="obvfsq", grid_str="W")
     #gea.get_mean_glosat_variable(y0=1850, y1=1870, var="obvfsq", grid_str="W",
     #                             mld_mid=True)
-    gea.plot_mean_glosat_change_difference_only(var="somxl010", 
-                                 label="Mixed Layer Depth",
-                                unit="m", slim=15, wlim=200)
-    gea.plot_mean_glosat_change_difference_only(var="tos",
-                             label="Surface Temperature",
-                                unit=r"$^{\circ}$C", slim=2.5, wlim=2.5)
+    #gea.plot_mean_glosat_change_difference_only(var="somxl010", 
+    #                             label="Mixed Layer Depth",
+    #                            unit="m", slim=15, wlim=200)
+    #gea.plot_mean_glosat_change_difference_only(var="tos",
+    #                         label="Surface Temperature",
+    #                            unit=r"$^{\circ}$C", slim=2.5, wlim=2.5)
     #gea.plot_meridional_overturning_timeseries(y0=1850,y1=2014)
     #gea.get_barotropic_stream_function(y0=1850, y1=2015, averaging="annual")
     #gea.get_surface_annual_mean_temperature(y0=1850, y1=2015)
-    #gea.plot_BSF_and_AMOC_single_ensemble()
+    gea.plot_BSF_and_AMOC_single_ensemble()
     
     #gea.get_barotropic_stream_function(y0=1940, y1=1960)
     #gea.create_sea_ice_area_sum()
