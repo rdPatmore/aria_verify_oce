@@ -454,6 +454,18 @@ class glosat_ensemble_analysis(object):
         BSF_masked.to_netcdf(self.save_path + 
                              f"glosat_{averaging}_mean_BSF_{y0}_{y1}.nc")
 
+    def get_hadisst(self):
+        """ get MetOffice hadisst data """
+
+        # hadisst
+        path = "/badc/ukmo-hadisst/data/sst/HadISST_sst.nc"
+        self.hadisst = xr.open_dataset(path, chunks="auto")
+
+    def fit_dim(self, da, dim, deg=1):
+        p = da.polyfit(dim=dim, deg=deg)
+        fit = xr.polyval(da[dim], p.polyfit_coefficients)
+        return da-fit, fit
+
     def plot_BSF_and_AMOC_single_ensemble(self):
         """ plot timeseries of BSF and AMOC over spg """
 
@@ -475,7 +487,8 @@ class glosat_ensemble_analysis(object):
                                  "glosat_tos_1850_2015_date_err.nc")
 
         # set time units
-        TOS["time_counter"] = [np.datetime64(str(int(y)), "Y") for y in TAU.year]
+        TOS["time_counter"] = [np.datetime64(str(int(y)), "Y") for y in
+                               TAU.year]
         TOS = TOS.rename({"time_counter":"year"})
         TAU["year"] = [np.datetime64(str(int(y)), "Y") for y in TAU.year]
         NAO["year"] = [np.datetime64(str(int(y)), "Y") for y in NAO.year]
@@ -483,6 +496,9 @@ class glosat_ensemble_analysis(object):
         AMOC["time_centered"] = [np.datetime64(str(m.values), "M") 
                                  for m in AMOC.time_centered]
         
+        # mean global temperature
+        mean_global_TOS = TOS.mean(["x","y"])
+
         # find SPG and NAG max
         BSF_na = self.restrict_to_NA(BSF, domain="ocean")
         TAU_na = self.restrict_to_NA(TAU, domain="ocean")
@@ -504,13 +520,13 @@ class glosat_ensemble_analysis(object):
         #NAG_alt = np.abs(BSF_na.isel(x=NAG_lon_mode,y=NAG_lat_mode))
 
         # get SPG and NAG max (moving position)
-        SPG = BSF_na.max(["x","y"])
-        NAG = np.abs(BSF_na.min(["x","y"]))
-
         #TAU = np.abs(TAU_na.isel(x=SPG_lon_mode,y=SPG_lat_mode))
         #TOS = np.abs(TOS_na.isel(x=SPG_lon_mode,y=SPG_lat_mode))
         TOS = TOS_na.mean(["x","y"])
         TAU = TAU_na.mean(["x","y"])
+
+        TOS_anom = TOS - mean_global_TOS
+
         
         # rolling mean AMOC
         AMOC = AMOC.rolling(time_centered=12, center=True).mean()
@@ -521,16 +537,11 @@ class glosat_ensemble_analysis(object):
         SPG_rolling = SPG.rolling(year=5, center=True).mean()
 
         # add linear fit
-        def fit_dim(da, dim, deg=1):
-            p = da.polyfit(dim=dim, deg=deg)
-            fit = xr.polyval(da[dim], p.polyfit_coefficients)
-            return da-fit, fit
-
-        AMOC_detrended, AMOC_fit = fit_dim(AMOC, "time_centered")
-        SPG_detrended, SPG_fit = fit_dim(SPG_rolling, "year")
-        NAG_detrended, NAG_fit = fit_dim(NAG, "year")
-        TOS_detrended, TOS_fit = fit_dim(TOS, "year")
-        TAU_detrended, TAU_fit = fit_dim(TAU, "year")
+        AMOC_detrended, AMOC_fit = self.fit_dim(AMOC, "time_centered")
+        SPG_detrended, SPG_fit = self.fit_dim(SPG_rolling, "year")
+        NAG_detrended, NAG_fit = self.fit_dim(NAG, "year")
+        TOS_detrended, TOS_fit = self.fit_dim(TOS, "year")
+        TAU_detrended, TAU_fit = self.fit_dim(TAU, "year")
 
         # rolling window correlation
         def rolling_window_correlation(lag, ww, da0, da1, time_var):
@@ -560,10 +571,6 @@ class glosat_ensemble_analysis(object):
 
             return corr
 
-        #fig, axs = plt.subplots(6, figsize=(6.5,10))
-        #plt.subplots_adjust(left=0.15, top=0.98, right=0.82, bottom=0.08,
-        #                    hspace=0.32)
-
         # initialise figure
         fig = plt.figure(figsize=(6.5,8))
 
@@ -591,6 +598,7 @@ class glosat_ensemble_analysis(object):
             print (corr.data)
             corr_list.append(corr)
         corr_lags = xr.concat(corr_list, "lag")
+
         # bootstrap lag
         time_len = len(corr_lags.year)
         rand_idx = np.random.randint(time_len, size=time_len*10)
@@ -610,7 +618,6 @@ class glosat_ensemble_analysis(object):
         # plot positions
         #SPG_ind = BSF_na.argmin(["x","y"])
         #plt.scatter(BSF_na.x[SPG_ind["x"]], BSF_na.y[SPG_ind["y"]].data)
-
 
         axs0[0].plot(TOS_fit.year.dt.year, TOS_fit, c="k")
         axs0[0].plot(TOS.year.dt.year, TOS)
@@ -644,6 +651,56 @@ class glosat_ensemble_analysis(object):
 
         axs0[2].legend(bbox_to_anchor=[1.01,1.05])
         plt.savefig(self.save_path + "timeseries_master.png", dpi=1200)
+
+    def plot_caesar_hadisst_comp(self):
+        """
+        UNDER CONSTRUCTION
+        Plot comparion of glosat sst trend with hadisst
+        Note: already compared in the past and model does not match obs
+        """
+
+        BSF = xr.open_dataarray(self.save_path +
+                             "glosat_annual_mean_BSF_1850_2015.nc")
+
+        TOS = xr.open_dataarray(self.save_path +
+                                 "glosat_tos_1850_2015_date_err.nc")
+        self.get_hadisst() 
+
+        # set time units
+        TOS["time_counter"] = [np.datetime64(str(int(y)), "Y") for y in
+                               TAU.year]
+        TOS = TOS.rename({"time_counter":"year"})
+        BSF["year"] = [np.datetime64(str(int(y)), "Y") for y in BSF.year]
+        
+        # mean global temperature
+        mean_global_TOS = TOS.mean(["x","y"])
+        BSF_na = self.restrict_to_NA(BSF, domain="ocean")
+        TOS_na = self.restrict_to_NA(TOS, domain="ocean")
+        longitudes = BSF_na.nav_lon[BSF_na.argmax(["x","y"])]
+        latitudes = BSF_na.nav_lat[BSF_na.argmax(["x","y"])]
+
+        self.hadisst = self.hadisst.groupby("time.year").mean()
+        self.hadisst["year"] = [np.datetime64(str(m.values), "M") 
+                                 for m in self.hadisst.year]
+        longitudes, latitudes, self.hadisst = xr.align(longitudes,
+                                                       latitudes,
+                                                       self.hadisst)
+        hadisst_spg = self.hadisst.sel(longitude=longitudes,
+                                       latitude=latitudes, method="nearest").sst
+
+        SPG = BSF_na.max(["x","y"])
+        NAG = np.abs(BSF_na.min(["x","y"]))
+
+        TOS_detrended, TOS_fit = self.fit_dim(TOS, "year")
+        hadisst_spg_detrended, hadisst_spg_fit = self.fit_dim(hadisst_spg,
+                     "year")
+        TOS_anom_detrended, TOS_anom_fit = self.fit_dim(TOS_anom, "year")
+        axs0[0].plot(TOS_fit.year.dt.year, TOS_fit, c="k")
+        axs0[0].plot(TOS.year.dt.year, TOS)
+        axs0[0].plot(hadisst_spg.year.dt.year, hadisst_spg)
+        axs0[0].plot(hadisst_spg_fit.year.dt.year, hadisst_spg_fit, c="k")
+        axs0[2].plot(TOS_anom_fit.year.dt.year, TOS_anom_fit, c="k")
+        axs0[2].plot(TOS_anom.year.dt.year, TOS_anom)
 
     def curl(self, domcfg, u, v):
 
