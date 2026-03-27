@@ -21,7 +21,6 @@ class glosat_ensemble_analysis(object):
         self.glosat_path = "/gws/nopw/j04/glosat/production/UKESM/raw/"
         self.verify_root = "/gws/ssde/j25a/verify_oce/NEMO/"
         self.case = "GloSat"
-
         
         self.ensemble_list=["u-ck651",
                             "u-co986",
@@ -128,7 +127,7 @@ class glosat_ensemble_analysis(object):
         """ get sea ice standard deviation timeseries"""
 
     def get_da(self, path, var):
-        da = xr.open_dataset(path, chunks={"time_counter":1})[var]
+        da = xr.open_dataset(path, chunks={"time_counter":1}, engine="netcdf4")[var]
         da = da.drop_vars("time_counter")
         da = da.swap_dims({"time_counter":"time_centered"})
         return da
