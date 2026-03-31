@@ -6,15 +6,16 @@ from dask.diagnostics import ProgressBar
 
 class NEMO_case(object):
 
-    def __init__(self, case, dom_cfg, zcoord="MES"):
+    def __init__(self, case, dom_cfg=None, zcoord="MES"):
         root = "/gws/ssde/j25a/verify_oce/NEMO/"
         self.nemo_path = root + "Outputs/" 
         self.case_path = self.nemo_path + case
-        self.dom_path = root + "Preprocessing/DOM/NAARC/" + dom_cfg
+        if dom_cfg:
+            self.dom_path = root + "Preprocessing/DOM/NAARC/" + dom_cfg
         self.save_path = root + f"PostProcessing/NAARC/{zcoord}/"
 
 
-    def get_barotropic_stream_function(self, y0, y1):
+    def calc_barotropic_stream_function(self, y0, y1):
         """
         calcualte BSF for NEMO output
         """
@@ -42,6 +43,9 @@ class NEMO_case(object):
 
         # get depth integrated velocities
         domcfg = xr.open_dataset(self.dom_path, chunks="auto").squeeze()
+        for coord in ["x", "yy"]:
+            if coord in domcfg.coords.keys():
+                domcfg = domcfg.drop_vars(coord)
         e1v = domcfg.e1v
         e1v = e1v.assign_coords({"nav_lon":domcfg.glamu,
                                  "nav_lat":domcfg.gphiu})
@@ -66,14 +70,25 @@ class NEMO_case(object):
         BSF_masked.to_netcdf(self.save_path + 
                              f"annual_mean_BSF_{y0}_{y1}.nc")
         
+    def get_barotropic_stream_function(self, y0, y1):
+        """ access saved bsf """
+        self.bsf = xr.open_dataarray(self.save_path + 
+                             f"annual_mean_BSF_{y0}_{y1}.nc")
+        
 class NEMO_compare(object):
     """
     """
 
-    def __init__(self, case):
+    def __init__(self, case_dict, y0, y1):
         self.nemo_path = "/gws/ssde/j25a/verify_oce/NEMO/Outputs/"
         self.mes_case = "EXP_mes_LSM_new_radiation/"
         self.zlevel_case = "EXP_zlevel_LSM_new_radiation/"
+        self.y0 = y0
+        self.y1 = y1
+
+        self.cases = {}
+        for i in range(len(case_dict)):
+            self.cases = {f"case{i}": NEMO_case(case_dict[0]["case"])}
     
     def get_glosat_var(self, y, var, grid_str):
     
@@ -106,8 +121,29 @@ class NEMO_compare(object):
         diff.plot(ax=axs[2], vmin=-2, vmax=2)
         plt.show()
 
-case = NEMO_case("EXP_mes_LSM_new_radiation", "domain_cfg_mes.nc")
-case.get_barotropic_stream_function(1850, 1854)
+    def plot_bsf_timeseries(self):
+        """
+        compare barotropic streamfunction timeseries for multiple cases
+        """
+
+        # initialise figure
+        fig, axs = plt.subplots(3, figsize=(5,12))
+
+        # get streamfunctions
+        print (self.cases)
+        for i in range(len(self.cases)):
+             self.cases[f"case{i}"].get_barotropic_stream_function(self.y0, self.y1)
+
+        axs[0].pcolormesh(self.cases["case0"].bsf.isel(year=-1).T)
+        plt.show()
+
+#case = NEMO_case("EXP_mes_LSM_new_radiation", "domain_cfg_mes.nc")
+#case.get_barotropic_stream_function(1850, 1854)
+
+case_dict = [{"case": "EXP_mes_LSM_new_radiation"}]
+comp = NEMO_compare(case_dict, 1850, 1854)
+comp.plot_bsf_timeseries()
+
 
 #nemo_comp = NEMO_compare()
 #nemo_comp.get_nemo("1854/12/VERIFY_1m_18541201_18541230_grid_T.nc", "tos_con")
