@@ -211,3 +211,7 @@ __marimo__/
 
 # credentals
 *credentials.json
+
+# other
+*dask_tmp*
+*slurm*.out
