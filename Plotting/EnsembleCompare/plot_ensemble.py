@@ -17,8 +17,8 @@ import dask
 from dask.distributed import Client, LocalCluster
 
 class glosat_ensemble_analysis(object):
-    def __init__(self):
-        self.glosat_path = "/gws/nopw/j04/glosat/production/UKESM/raw/"
+    def __init__(self, ensemble_member=None):
+        self.glosat_path = "/gws/ssde/j25a/glosat/production/UKESM/raw/"
         self.verify_root = "/gws/ssde/j25a/verify_oce/NEMO/"
         self.case = "GloSat"
         
@@ -29,9 +29,13 @@ class glosat_ensemble_analysis(object):
                             "u-cu101",
                             "u-cu102"]
         self.t0_range=["1850","1870"]
-        self.t1_range=["1940","1960"]
+        self.t1_range=["1950","1970"]
+        if ensemble_member:
+            self.ens = self.ensemble_list[ensemble_member]
+        else:
+            self.ens = self.ensemble_list[0]
         self.save_path = self.verify_root + "PostProcessing/" + self.case + \
-                         "/" + self.ensemble_list[0] + "/"
+                         "/" + self.ens + "/"
         self.plot_path = self.verify_root + "PostProcessing/Plots/" 
 
         dom_path = "Preprocessing/DOM/UKESM/domcfg_UKESM1p1_gdept.nc"
@@ -41,6 +45,19 @@ class glosat_ensemble_analysis(object):
         ds = ds.aice
         #ds = ds.aice.sum(["nj","ni"])
         return ds
+
+    def get_year_paths(self, y, grid="T"):
+        if (self.ens == "u-cu100") and (y > 1908):
+            ens = "u-cv458"
+        else:
+            ens = self.ens
+        paths0 = glob.glob(self.glosat_path + ens  +
+                             "/" + str(y) + f"*/*1m_{y}*grid-{grid}.nc")
+        paths1 = glob.glob(self.glosat_path + ens +
+                             "/" + str(y+1) + f"*/*1m_{y}*grid-{grid}.nc")
+        year_paths = paths0 + paths1
+
+        return year_paths
 
     #def get_aice(self, path):
     #    print (path)
@@ -138,6 +155,7 @@ class glosat_ensemble_analysis(object):
             da = da.swap_dims({"time_counter":"time_centered"})
             return da
         da = xr.open_mfdataset(paths, preprocess=preprocess,
+                           data_vars="minimal", compat="no_conflicts",
                            chunks={"time_counter":1})[var]
         return da
 
@@ -362,11 +380,7 @@ class glosat_ensemble_analysis(object):
             y_set = []
             for y in range(y0, y1):
                 print (y)
-                paths0 = glob.glob(self.glosat_path + self.ensemble_list[0] +
-                                     "/" + str(y) + f"*/*1m_{y}*grid-V.nc")
-                paths1 = glob.glob(self.glosat_path + self.ensemble_list[0] +
-                                     "/" + str(y+1) + f"*/*1m_{y}*grid-V.nc")
-                year_paths = paths0 + paths1
+                year_paths = self.get_year_paths(y,self.ensemble_list[0])
 
                 vvel_series = self.get_mfda(year_paths, "vo")
                 e3v_series = self.get_mfda(year_paths, "thkcello")

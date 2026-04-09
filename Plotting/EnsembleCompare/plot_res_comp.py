@@ -35,8 +35,8 @@ class NEMO_case(object):
 
             baroV = depth_weight_vvel_series.sum(dim="depthv") 
             #baroV_mean = baroV.mean("time_centered")
-            baroV_mean = baroV_mean.expand_dims(year=[y])
-            y_set.append(baroV_mean)
+            #baroV = baroV.expand_dims(year=[y])
+            y_set.append(baroV)
 
         with ProgressBar():
             baroV = xr.concat(y_set, "time_centered").load()
