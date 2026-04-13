@@ -60,16 +60,19 @@ class timeseries(object):
         temp_series_full.to_netcdf(fn)
 
     def calc_SPG_temperature_glosat_ens(self, y0, y1):
+        """ get subpolar gyre temperature for all ensemble members """
 
-        for i in range(4,7):
+        for i in range(6):
             self.calc_SPG_temperature_timeseries(y0, y1, i)
 
-    #def calc_AMOC_timeseries(self):
-    #    da = xr.open_dataset(path, chunks={"time_counter":1}, 
-    #            decode_times=False)["zomsfatl"]
-    #    da = da.drop_vars("time_counter")
-    #    da = da.swap_dims({"time_counter":"time_centered"})
-    #    da = da.squeeze()
-    #    return da
+    def get_AMOC_glosat_ens(self, y0, y1):
+        """ get AMOC strength for all ensemble members """
+
+        for i in range(6):
+            print (i)
+            gea = glosat_ensemble_analysis(ensemble_member=i)
+            gea.get_meridional_overturning_timeseries(y0, y1)
+
 ts = timeseries("","")
-ts.calc_SPG_temperature_glosat_ens(1850,2015)
+ts.get_AMOC_glosat_ens(1850,2015)
+#ts.calc_SPG_temperature_glosat_ens(1850,2015)

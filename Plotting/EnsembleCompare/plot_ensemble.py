@@ -46,15 +46,15 @@ class glosat_ensemble_analysis(object):
         #ds = ds.aice.sum(["nj","ni"])
         return ds
 
-    def get_year_paths(self, y, grid="T"):
+    def get_year_paths(self, y, append="grid-T"):
         if (self.ens == "u-cu100") and (y > 1908):
             ens = "u-cv458"
         else:
             ens = self.ens
         paths0 = glob.glob(self.glosat_path + ens  +
-                             "/" + str(y) + f"*/*1m_{y}*grid-{grid}.nc")
+                             "/" + str(y) + f"*/*1m_{y}*{append}.nc")
         paths1 = glob.glob(self.glosat_path + ens +
-                             "/" + str(y+1) + f"*/*1m_{y}*grid-{grid}.nc")
+                             "/" + str(y+1) + f"*/*1m_{y}*{append}.nc")
         year_paths = paths0 + paths1
 
         return year_paths
@@ -156,7 +156,7 @@ class glosat_ensemble_analysis(object):
             return da
         da = xr.open_mfdataset(paths, preprocess=preprocess,
                            data_vars="minimal", compat="no_conflicts",
-                           chunks={"time_counter":1})[var]
+                           chunks={"time_counter":1}, parallel=True)[var]
         return da
 
     def get_mld_mid(self, y0, y1):
@@ -380,7 +380,7 @@ class glosat_ensemble_analysis(object):
             y_set = []
             for y in range(y0, y1):
                 print (y)
-                year_paths = self.get_year_paths(y,self.ensemble_list[0])
+                year_paths = self.get_year_paths(y, append="grid-V")
 
                 vvel_series = self.get_mfda(year_paths, "vo")
                 e3v_series = self.get_mfda(year_paths, "thkcello")
@@ -820,35 +820,29 @@ class glosat_ensemble_analysis(object):
     def get_meridional_overturning_timeseries(self, y0, y1):
         """ plot overturning streamfuntion time series """
 
-        ensemble_amoc = []
-        for ensemble in self.ensemble_list:
-            print (ensemble)
-            path_set = []
-            for y in range(y0, y1):
-                paths0 = glob.glob(self.glosat_path + ensemble +
-                                     "/" + str(y) + f"*/*1m_{y}*diaptr.nc")
-                paths1 = glob.glob(self.glosat_path + ensemble +
-                                     "/" + str(y+1) + f"*/*1m_{y}*diaptr.nc")
-                paths = paths0 + paths1
+        # set paths to data
+        path_set = []
+        for y in range(y0, y1):
+            year_paths = self.get_year_paths(y, append="diaptr")
+            path_set += year_paths
 
-                path_set += paths
+        # get data
+        da_series = self.get_AMOC(path_set[0])
+        for path in path_set[1:]:
+            print (path)
+            da = self.get_AMOC(path)
+            da_series = xr.concat([da_series, da], dim="time_centered")
 
-            print ("paths set")
-            da_series = self.get_AMOC(path_set[0])
-            print ("first ts done")
-            for path in path_set[1:]:
-                print (path)
-                da = self.get_AMOC(path)
-                da_series = xr.concat([da_series, da], dim="time_centered")
-            ind_26n = (abs(da.nav_lat - 26.5)).argmin("y").values
-            ds_26n = da_series.isel(y=ind_26n)
-            
-            amoc = ds_26n.max("depthw")
-            amoc.expand_dims(ensemble=[ensemble])
-            ensemble_amoc.append(amoc)
+        # get 26.5N
+        ind_26n = (abs(da.nav_lat - 26.5)).argmin("y").values
+        ds_26n = da_series.isel(y=ind_26n)
+        
+        # get depth max
+        amoc = ds_26n.max("depthw")
 
-        ensemble_amoc_ds = xr.concat(ensemble_amoc, "ensemble")
-        ensemble_amoc_ds.to_netcdf(self.save_path + f"glosat_AMOC_{y0}_{y1}.nc")
+        # save
+        with ProgressBar():
+            amoc.to_netcdf(self.save_path + f"glosat_AMOC_{y0}_{y1}.nc")
 
     def plot_meridional_overturning_timeseries(self, y0, y1):
 

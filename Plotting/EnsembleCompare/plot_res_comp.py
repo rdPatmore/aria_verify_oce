@@ -33,13 +33,13 @@ class NEMO_case(object):
 
             depth_weight_vvel_series = vvel_series * e3v_series
 
-            baroV = depth_weight_vvel_series.sum(dim="depthv") 
+            with ProgressBar():
+                baroV = depth_weight_vvel_series.sum(dim="depthv").load()
             #baroV_mean = baroV.mean("time_centered")
             #baroV = baroV.expand_dims(year=[y])
             y_set.append(baroV)
 
-        with ProgressBar():
-            baroV = xr.concat(y_set, "time_centered").load()
+            baroV = xr.concat(y_set, "time_centered")
 
         # get depth integrated velocities
         domcfg = xr.open_dataset(self.dom_path, chunks="auto").squeeze()
@@ -50,10 +50,10 @@ class NEMO_case(object):
         e1v = e1v.assign_coords({"nav_lon":domcfg.glamu,
                                  "nav_lat":domcfg.gphiu})
 
-        baroV = baroV.stack(a=["x","y"])
-        e1v = e1v.stack(a=["x","y"])
+        baroV = baroV.stack(a=["y","x"])
+        e1v = e1v.stack(a=["y","x"])
 
-        baroU, e1v = xr.align(baroV, e1v)
+        baroV, e1v = xr.align(baroV, e1v)
 
         e1v = e1v.unstack("a")
         baroV = baroV.unstack("a")
@@ -68,12 +68,12 @@ class NEMO_case(object):
 
         BSF_masked.name = "BSF"
         BSF_masked.to_netcdf(self.save_path + 
-                             f"BSF_{y0}_{y1}.nc")
+                             f"BSF_{y0}_{y1-1}.nc")
         
     def get_barotropic_stream_function(self, y0, y1):
         """ access saved bsf """
         self.bsf = xr.open_dataarray(self.save_path + 
-                             f"BSF_{y0}_{y1}.nc")
+                             f"BSF_{y0}_{y1-1}.nc")
         
 class NEMO_compare(object):
     """
@@ -138,9 +138,9 @@ class NEMO_compare(object):
         plt.show()
 
 case = NEMO_case("EXP_mes_LSM_new_radiation", "domain_cfg_mes.nc")
-case.calc_barotropic_stream_function(1850, 1854)
+case.calc_barotropic_stream_function(1850, 1858)
 case = NEMO_case("EXP_zlevel_LSM_new_radiation", "domain_cfg_zps.nc")
-case.calc_barotropic_stream_function(1850, 1854)
+case.calc_barotropic_stream_function(1850, 1858)
 
 #case_dict = [{"case": "EXP_mes_LSM_new_radiation"}]
 #comp = NEMO_compare(case_dict, 1850, 1854)
