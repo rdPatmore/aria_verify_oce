@@ -11,6 +11,7 @@ import iris
 import xeofs as xe
 from scipy import stats
 import matplotlib.gridspec as gridspec
+from scipy.interpolate import griddata
 
 import os
 import dask
@@ -467,12 +468,101 @@ class glosat_ensemble_analysis(object):
         BSF_masked.to_netcdf(self.save_path + 
                              f"glosat_{averaging}_mean_BSF_{y0}_{y1}.nc")
 
-    def get_hadisst(self):
+    def process_hadisst(self, regrid_to_model=False, resample_annual=False,
+            save=True):
         """ get MetOffice hadisst data """
 
         # hadisst
         path = "/badc/ukmo-hadisst/data/sst/HadISST_sst.nc"
-        self.hadisst = xr.open_dataset(path, chunks="auto")
+        self.hadisst = xr.open_dataset(path, chunks="auto").sst
+
+        # mask sea ice
+        path = "/badc/ukmo-hadisst/data/ice/HadISST_ice.nc"
+        hadiice = xr.open_dataset(path, chunks="auto").sic
+        hadiice, self.hadisst = xr.align(hadiice, self.hadisst)
+        self.hadisst = xr.where(hadiice == 0, self.hadisst, np.nan)
+
+        if resample_annual:
+            self.hadisst = self.hadisst.resample(time="1YS").mean()
+        
+        if regrid_to_model:
+           self.hadisst = self.interpolate_to_model(self.dom_path, self.hadisst)
+
+        if save:
+            self.hadisst.to_netcdf(self.save_path +
+                                   "HadISST_sst_interpolated.nc")
+
+    def process_hadiice(self, regrid_to_model=False, resample_annual=False,
+            save=True):
+        """ get MetOffice hadiice data """
+
+        # hadisst
+        path = "/badc/ukmo-hadisst/data/ice/HadISST_ice.nc"
+        self.hadiice = xr.open_dataset(path, chunks="auto").sic
+
+        if resample_annual:
+            self.hadiice = self.hadiice.resample(time="1YS").mean()
+        
+        if regrid_to_model:
+           self.hadiice = self.interpolate_to_model(self.dom_path, self.hadiice)
+
+        if save:
+            self.hadiice.to_netcdf(self.save_path +
+                                   "HadISST_ice_interpolated.nc")
+
+    def process_cice(self, regrid_to_model=False, resample_annual=False,
+            save=True):
+        """ get glosat cice data """
+
+        # hadisst
+        paths = glob.glob(self.glosat_path + self.ens + 
+                           "/*/cice*1m*.nc")
+        da_series = []
+        for path in paths:
+            print (path)
+            ds_sample = xr.open_dataset(path, chunks="auto")
+            da_series.append(ds_sample.aice)
+
+        cice = xr.concat(da_series, "time")
+        cice = cice.sortby("time")
+        cice = cice.rename({"TLON":"longitude",
+                            "TLAT":"latitude"})
+
+        if resample_annual:
+            cice = cice.resample(time="1YS").mean()
+        
+        with ProgressBar():
+            cice = cice.load()
+            
+        if regrid_to_model:
+           cice = self.interpolate_to_model(self.dom_path, cice)
+
+        if save:
+            y0 = cice.time_counter.dt.year.min().values
+            y1 = cice.time_counter.dt.year.max().values
+            print (y0)
+            print (y1)
+            cice.to_netcdf(self.save_path + 
+                           f"glosat_cice_interpolated_{y0}_{y1}.nc")
+
+
+    def get_hadi(self, var="sst", load=False):
+
+        # hadisst
+        path = "/badc/ukmo-hadisst/data/ice/HadISST_ice.nc"
+        if var == "sst":
+            path  = self.save_path + "HadISST_sst_interpolated.nc"
+            self.hadisst = xr.open_dataarray(path, chunks="auto")
+            if load:
+                self.hadisst = self.hadisst.load()
+        elif var == "ice":
+            path  = self.save_path + "HadISST_ice_interpolated.nc"
+            self.hadiice = xr.open_dataarray(path, chunks="auto")
+        
+            if load:
+                self.hadiice = self.hadiice.load()
+
+
 
     def fit_dim(self, da, dim, deg=1):
         p = da.polyfit(dim=dim, deg=deg)
@@ -665,6 +755,51 @@ class glosat_ensemble_analysis(object):
         axs0[2].legend(bbox_to_anchor=[1.01,1.05])
         plt.savefig(self.save_path + "timeseries_master.png", dpi=1200)
 
+    def interpolate_to_model(self, tgt_cfg_fn, src_ds):
+        """ interpolate lat-lon to horizontal grid """
+
+        domcfg = xr.open_dataset(tgt_cfg_fn, chunks="auto")
+
+        tgt_lon =  domcfg.nav_lon
+        tgt_lat =  domcfg.nav_lat
+        
+        target = (tgt_lon, tgt_lat)
+
+        src_lon = src_ds.longitude.values
+        src_lat = src_ds.latitude.values
+
+        if len(src_lon.shape) == 2:
+            src_mlon = src_lon
+            src_mlat = src_lat
+        else:
+            src_mlon, src_mlat = np.meshgrid(src_lon, src_lat)
+
+        points = (src_mlon.flatten(), src_mlat.flatten())
+
+        n_grid_all = []
+        for i, (time, ds_t) in enumerate(src_ds.groupby("time")):
+            print (time)
+            values = ds_t.values.flatten()
+            values_masked = (np.nan_to_num(values))
+            
+            if i == 0:
+                n_grid_all = griddata(points, values_masked, target,
+                                      method="cubic")[:,:,np.newaxis]
+            else:
+                n_grid = griddata(points, values_masked, target,
+                          method="cubic")[:,:,np.newaxis]
+                n_grid_all = np.concatenate([n_grid_all, n_grid], axis=2)
+
+        src_ds = src_ds.rename({"time": "time_counter"})
+        ds = xr.DataArray(
+                             data=n_grid_all,
+                             dims=["y","x","time_counter"],
+                             coords={"nav_lon": (["y","x"],tgt_lon.values),
+                                     "nav_lat": (["y","x"],tgt_lat.values),
+                                     "time_counter": src_ds.time_counter},
+                             name=src_ds.name)#.to_dataset()
+        return ds
+
     def plot_caesar_hadisst_comp(self):
         """
         UNDER CONSTRUCTION
@@ -677,43 +812,52 @@ class glosat_ensemble_analysis(object):
 
         TOS = xr.open_dataarray(self.save_path +
                                  "glosat_tos_1850_2015_date_err.nc")
-        self.get_hadisst() 
+
+        self.get_hadi(var="sst", load=True)
+        vmin = 0
+        vmax=10
+        fig, axs = plt.subplots(2, figsize=(5.5,5.5))
+        axs[0].pcolor(TOS.sel(time_counter="1950", method="nearest"), vmin=vmin, vmax=vmax)
+        axs[1].pcolor(self.hadisst.sel(time_counter="1950", method="nearest"), vmin=vmin, vmax=vmax)
 
         # set time units
-        TOS["time_counter"] = [np.datetime64(str(int(y)), "Y") for y in
-                               TAU.year]
-        TOS = TOS.rename({"time_counter":"year"})
+        #TOS["time_counter"] = [np.datetime64(str(int(y)), "Y") for y in
+        #                       TOS.time_counter]
         BSF["year"] = [np.datetime64(str(int(y)), "Y") for y in BSF.year]
+        BSF = BSF.rename({"year":"time_counter"})
         
-        # mean global temperature
-        mean_global_TOS = TOS.mean(["x","y"])
         BSF_na = self.restrict_to_NA(BSF, domain="ocean")
-        TOS_na = self.restrict_to_NA(TOS, domain="ocean")
-        longitudes = BSF_na.nav_lon[BSF_na.argmax(["x","y"])]
-        latitudes = BSF_na.nav_lat[BSF_na.argmax(["x","y"])]
 
-        self.hadisst = self.hadisst.groupby("time.year").mean()
-        self.hadisst["year"] = [np.datetime64(str(m.values), "M") 
-                                 for m in self.hadisst.year]
-        longitudes, latitudes, self.hadisst = xr.align(longitudes,
-                                                       latitudes,
-                                                       self.hadisst)
-        hadisst_spg = self.hadisst.sel(longitude=longitudes,
-                                       latitude=latitudes, method="nearest").sst
+        # mean global temperature
+        TOS_na = self.restrict_to_NA(TOS, domain="ocean")
+        TOS_na = TOS_na.where(BSF_na > 10)
+        mean_global_TOS = TOS.mean(["x","y"])
+        TOS = TOS_na.mean(["x","y"])
+        TOS_anom = TOS - mean_global_TOS
+
+        hadisst_na = self.restrict_to_NA(self.hadisst, domain="ocean")
+        hadisst_na = hadisst_na.where(BSF_na > 10)
+        hadisst_mean_global=self.hadisst.mean(["x","y"])
+        hadisst=hadisst_na.mean(["x","y"])
+        
+        hadisst_anom = hadisst - hadisst_mean_global
 
         SPG = BSF_na.max(["x","y"])
         NAG = np.abs(BSF_na.min(["x","y"]))
 
-        TOS_detrended, TOS_fit = self.fit_dim(TOS, "year")
-        hadisst_spg_detrended, hadisst_spg_fit = self.fit_dim(hadisst_spg,
-                     "year")
-        TOS_anom_detrended, TOS_anom_fit = self.fit_dim(TOS_anom, "year")
-        axs0[0].plot(TOS_fit.year.dt.year, TOS_fit, c="k")
-        axs0[0].plot(TOS.year.dt.year, TOS)
-        axs0[0].plot(hadisst_spg.year.dt.year, hadisst_spg)
-        axs0[0].plot(hadisst_spg_fit.year.dt.year, hadisst_spg_fit, c="k")
-        axs0[2].plot(TOS_anom_fit.year.dt.year, TOS_anom_fit, c="k")
-        axs0[2].plot(TOS_anom.year.dt.year, TOS_anom)
+        hadisst_spg_detrended, hadisst_spg_fit = self.fit_dim(hadisst_anom,
+                     "time_counter")
+        TOS_anom_detrended, TOS_anom_fit = self.fit_dim(TOS_anom,
+                "time_counter")
+        fig, axs = plt.subplots(3, figsize=(5.5,5.5))
+        axs[0].plot(hadisst_anom.time_counter.dt.year, hadisst_anom)
+        axs[0].plot(hadisst_spg_fit.time_counter.dt.year, hadisst_spg_fit,
+                        c="k")
+        axs[0].plot(TOS_anom_fit.time_counter.dt.year, TOS_anom_fit, c="k")
+        axs[0].plot(TOS_anom.time_counter.dt.year, TOS_anom)
+        axs[1].pcolor(TOS_na.sel(time_counter="1950", method="nearest"), vmin=vmin, vmax=vmax)
+        axs[2].pcolor(hadisst_na.sel(time_counter="1950", method="nearest"), vmin=vmin, vmax=vmax)
+        plt.show()
 
     def curl(self, domcfg, u, v):
 
@@ -867,17 +1011,18 @@ class glosat_ensemble_analysis(object):
         
         plt.savefig("AMOC.png",dpi=600)
     
-    def restrict_to_NA(self, da, domain="ocean", drop=True):
+    def restrict_to_NA(self, da, domain="ocean", drop=True, lon_coord="nav_lon",
+            lat_coord="nav_lat"):
         """ restrict lat and lon on NAO definition """
 
         if domain == "ocean":
             lat_lims = [26,70]
             lon_lims = [-90,40]
 
-            da = da.where((da.nav_lon > lon_lims[0]) &
-                          (da.nav_lon < lon_lims[1]) &
-                          (da.nav_lat > lat_lims[0]) &
-                          (da.nav_lat < lat_lims[1]), drop=drop)
+            da = da.where((da[lon_coord] > lon_lims[0]) &
+                          (da[lon_coord] < lon_lims[1]) &
+                          (da[lat_coord] > lat_lims[0]) &
+                          (da[lat_coord] < lat_lims[1]), drop=drop)
 
         elif domain == "seaice":
             lat_lims = [26,70]
@@ -1030,6 +1175,8 @@ if __name__ == "__main__":
     #client = Client(cluster)
 
     gea = glosat_ensemble_analysis()
+    gea.process_cice(regrid_to_model=True, resample_annual=True,save=True)
+    #gea.plot_caesar_hadisst_comp()
     #gea.get_mean_NA_var(y0=1850, y1=2014, var="tos", grid_str="T")
     #gea.get_NAO(y0=1850, y1=2015)
     #gea.get_NAO_slp()
@@ -1045,7 +1192,7 @@ if __name__ == "__main__":
     #gea.plot_meridional_overturning_timeseries(y0=1850,y1=2014)
     #gea.get_barotropic_stream_function(y0=1850, y1=2015, averaging="annual")
     #gea.get_surface_annual_mean_temperature(y0=1850, y1=2015)
-    gea.plot_BSF_and_AMOC_single_ensemble()
+    #gea.plot_BSF_and_AMOC_single_ensemble()
     
     #gea.get_barotropic_stream_function(y0=1940, y1=1960)
     #gea.create_sea_ice_area_sum()
