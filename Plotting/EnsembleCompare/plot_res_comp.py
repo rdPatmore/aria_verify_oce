@@ -232,10 +232,10 @@ class NEMO_compare(object):
 
         # plot section
 
-#case = NEMO_case("EXP_mes_LSM_new_radiation", "domain_cfg_mes.nc")
+case = NEMO_case("EXP_mes_LSM_new_radiation", "domain_cfg_mes.nc")
 #case.calc_barotropic_stream_function(1850, 1858)
-case = NEMO_case("EXP_zlevel_LSM_new_radiation", "domain_cfg_zps.nc",
-        zcoord="ZPS")
+#case = NEMO_case("EXP_zlevel_LSM_new_radiation", "domain_cfg_zps.nc",
+#        zcoord="ZPS")
 case.calc_barotropic_stream_function(1850, 1860)
 #case_dict = [{"case": "EXP_mes_LSM_new_radiation"}]
 #nemo_comp = NEMO_compare(case_dict)

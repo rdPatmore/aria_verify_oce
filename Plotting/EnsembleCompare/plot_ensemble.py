@@ -469,18 +469,23 @@ class glosat_ensemble_analysis(object):
                              f"glosat_{averaging}_mean_BSF_{y0}_{y1}.nc")
 
     def process_hadisst(self, regrid_to_model=False, resample_annual=False,
-            save=True):
+            save=True, mask_seaice=True):
         """ get MetOffice hadisst data """
 
         # hadisst
         path = "/badc/ukmo-hadisst/data/sst/HadISST_sst.nc"
         self.hadisst = xr.open_dataset(path, chunks="auto").sst
+        save_path = self.save_path + "HadISST_sst_interpolated.nc"
 
         # mask sea ice
-        path = "/badc/ukmo-hadisst/data/ice/HadISST_ice.nc"
-        hadiice = xr.open_dataset(path, chunks="auto").sic
-        hadiice, self.hadisst = xr.align(hadiice, self.hadisst)
-        self.hadisst = xr.where(hadiice == 0, self.hadisst, np.nan)
+        if mask_seaice:
+            path = "/badc/ukmo-hadisst/data/ice/HadISST_ice.nc"
+            hadiice = xr.open_dataset(path, chunks="auto").sic
+            hadiice, self.hadisst = xr.align(hadiice, self.hadisst)
+            self.hadisst = xr.where(hadiice == 0, self.hadisst, np.nan)
+            save_path = self.save_path + "HadiSST_sst_interpolated_masked.nc"
+        else:
+            self.hadisst = xr.where(self.hadisst<-50, np.nan, self.hadisst)
 
         if resample_annual:
             self.hadisst = self.hadisst.resample(time="1YS").mean()
@@ -489,8 +494,7 @@ class glosat_ensemble_analysis(object):
            self.hadisst = self.interpolate_to_model(self.dom_path, self.hadisst)
 
         if save:
-            self.hadisst.to_netcdf(self.save_path +
-                                   "HadISST_sst_interpolated.nc")
+            self.hadisst.to_netcdf(save_path)
 
     def process_hadiice(self, regrid_to_model=False, resample_annual=False,
             save=True):
@@ -527,6 +531,10 @@ class glosat_ensemble_analysis(object):
         cice = cice.sortby("time")
         cice = cice.rename({"TLON":"longitude",
                             "TLAT":"latitude"})
+       
+        cice["longitude"] = xr.where(cice.longitude > 180,
+                                     cice.longitude - 360,
+                                     cice.longitude)
 
         if resample_annual:
             cice = cice.resample(time="1YS").mean()
@@ -546,15 +554,19 @@ class glosat_ensemble_analysis(object):
                            f"glosat_cice_interpolated_{y0}_{y1}.nc")
 
 
-    def get_hadi(self, var="sst", load=False):
+    def get_hadi(self, var="sst", load=False, icemask=False):
 
         # hadisst
-        path = "/badc/ukmo-hadisst/data/ice/HadISST_ice.nc"
         if var == "sst":
-            path  = self.save_path + "HadISST_sst_interpolated.nc"
+            if icemask:
+                path  = self.save_path + "HadISST_sst_interpolated_masked.nc"
+            else:
+                path  = self.save_path + "HadISST_sst_interpolated.nc"
             self.hadisst = xr.open_dataarray(path, chunks="auto")
             if load:
                 self.hadisst = self.hadisst.load()
+
+            return self.hadisst
         elif var == "ice":
             path  = self.save_path + "HadISST_ice_interpolated.nc"
             self.hadiice = xr.open_dataarray(path, chunks="auto")
@@ -562,7 +574,7 @@ class glosat_ensemble_analysis(object):
             if load:
                 self.hadiice = self.hadiice.load()
 
-
+            return self.hadiice
 
     def fit_dim(self, da, dim, deg=1):
         p = da.polyfit(dim=dim, deg=deg)
@@ -780,17 +792,18 @@ class glosat_ensemble_analysis(object):
         for i, (time, ds_t) in enumerate(src_ds.groupby("time")):
             print (time)
             values = ds_t.values.flatten()
-            values_masked = (np.nan_to_num(values))
+            values_masked = (np.nan_to_num(values, nan=-9999))
             
             if i == 0:
                 n_grid_all = griddata(points, values_masked, target,
-                                      method="cubic")[:,:,np.newaxis]
+                                      method="nearest")[:,:,np.newaxis]
             else:
                 n_grid = griddata(points, values_masked, target,
-                          method="cubic")[:,:,np.newaxis]
+                          method="nearest")[:,:,np.newaxis]
                 n_grid_all = np.concatenate([n_grid_all, n_grid], axis=2)
 
         src_ds = src_ds.rename({"time": "time_counter"})
+        n_grid_all = xr.where(n_grid_all == -9999, np.nan, n_grid_all)
         ds = xr.DataArray(
                              data=n_grid_all,
                              dims=["y","x","time_counter"],
@@ -798,6 +811,9 @@ class glosat_ensemble_analysis(object):
                                      "nav_lat": (["y","x"],tgt_lat.values),
                                      "time_counter": src_ds.time_counter},
                              name=src_ds.name)#.to_dataset()
+
+        ds = ds.transpose("time_counter","y","x") 
+
         return ds
 
     def plot_caesar_hadisst_comp(self):
@@ -813,51 +829,78 @@ class glosat_ensemble_analysis(object):
         TOS = xr.open_dataarray(self.save_path +
                                  "glosat_tos_1850_2015_date_err.nc")
 
-        self.get_hadi(var="sst", load=True)
-        vmin = 0
-        vmax=10
-        fig, axs = plt.subplots(2, figsize=(5.5,5.5))
-        axs[0].pcolor(TOS.sel(time_counter="1950", method="nearest"), vmin=vmin, vmax=vmax)
-        axs[1].pcolor(self.hadisst.sel(time_counter="1950", method="nearest"), vmin=vmin, vmax=vmax)
+        cice = xr.open_dataarray(self.save_path + 
+                           f"glosat_cice_interpolated_1850_2014.nc")
+
+        hadisst = self.get_hadi(var="sst", load=True, icemask=False)
 
         # set time units
-        #TOS["time_counter"] = [np.datetime64(str(int(y)), "Y") for y in
-        #                       TOS.time_counter]
         BSF["year"] = [np.datetime64(str(int(y)), "Y") for y in BSF.year]
         BSF = BSF.rename({"year":"time_counter"})
         
         BSF_na = self.restrict_to_NA(BSF, domain="ocean")
 
-        # mean global temperature
+        ## mask TOS
+        #cice["time_counter"] = TOS.time_counter
+        #TOS_r = TOS.isel(y=slice(None,-1), x=slice(1,-1))
+
+        #vmin = 0
+        #vmax=10
+        #fig, axs = plt.subplots(2, 2, figsize=(5.5,5.5))
+        #axs[0,0].pcolor(TOS.sel(time_counter="1950", method="nearest"),
+        #              vmin=vmin, vmax=vmax)
+        #axs[0,1].pcolor(hadisst.sel(time_counter="1950", method="nearest"),
+        #              vmin=vmin, vmax=vmax)
+
+        # get model sst anomaly
         TOS_na = self.restrict_to_NA(TOS, domain="ocean")
         TOS_na = TOS_na.where(BSF_na > 10)
         mean_global_TOS = TOS.mean(["x","y"])
         TOS = TOS_na.mean(["x","y"])
         TOS_anom = TOS - mean_global_TOS
 
-        hadisst_na = self.restrict_to_NA(self.hadisst, domain="ocean")
+        # get hadisst anomaly
+        hadisst_na = self.restrict_to_NA(hadisst, domain="ocean")
         hadisst_na = hadisst_na.where(BSF_na > 10)
-        hadisst_mean_global=self.hadisst.mean(["x","y"])
-        hadisst=hadisst_na.mean(["x","y"])
-        
-        hadisst_anom = hadisst - hadisst_mean_global
+        hadisst_mean_global=hadisst.mean(["x","y"])
+        hadisst_na_mean = hadisst_na.mean(["x","y"])
+        hadisst_anom = hadisst_na_mean - hadisst_mean_global
 
+        # Get gyre strengths
         SPG = BSF_na.max(["x","y"])
         NAG = np.abs(BSF_na.min(["x","y"]))
 
+        # trend lines
         hadisst_spg_detrended, hadisst_spg_fit = self.fit_dim(hadisst_anom,
                      "time_counter")
         TOS_anom_detrended, TOS_anom_fit = self.fit_dim(TOS_anom,
                 "time_counter")
-        fig, axs = plt.subplots(3, figsize=(5.5,5.5))
-        axs[0].plot(hadisst_anom.time_counter.dt.year, hadisst_anom)
-        axs[0].plot(hadisst_spg_fit.time_counter.dt.year, hadisst_spg_fit,
+
+        #plotting
+        fig, axs = plt.subplots(2, figsize=(5.5,5.5))
+        axs[0].plot(hadisst_anom.time_counter, hadisst_anom,
+                    label="hadisst")
+        axs[0].plot(hadisst_spg_fit.time_counter, hadisst_spg_fit,
                         c="k")
-        axs[0].plot(TOS_anom_fit.time_counter.dt.year, TOS_anom_fit, c="k")
-        axs[0].plot(TOS_anom.time_counter.dt.year, TOS_anom)
-        axs[1].pcolor(TOS_na.sel(time_counter="1950", method="nearest"), vmin=vmin, vmax=vmax)
-        axs[2].pcolor(hadisst_na.sel(time_counter="1950", method="nearest"), vmin=vmin, vmax=vmax)
-        plt.show()
+        axs[0].plot(TOS_anom_fit.time_counter, TOS_anom_fit, c="k")
+        axs[0].plot(TOS_anom.time_counter, TOS_anom,
+                    label="GloSat UKESM")
+        axs[1].plot(hadisst_mean_global.time_counter, hadisst_mean_global,
+                    label="hadisst")
+        axs[1].plot(mean_global_TOS.time_counter, mean_global_TOS,
+                    label="GloSat UKESM")
+        axs[0].legend()
+
+        for ax in axs:
+            ax.set_xlim(np.datetime64("1850-01-01"),
+                        np.datetime64("2014-01-01"))
+        axs[1].set_xlabel("Date")
+        axs[0].set_ylabel("Subpolar Gyre Temperature\nAnomaly from Global Mean")
+        axs[1].set_ylabel("Global Mean Temperature")
+
+        # save
+        plt.savefig("Figs/GloSat_HadiSST_SPG_temperature_comparison.png",
+                      dpi=600)
 
     def curl(self, domcfg, u, v):
 
@@ -1175,8 +1218,9 @@ if __name__ == "__main__":
     #client = Client(cluster)
 
     gea = glosat_ensemble_analysis()
-    gea.process_cice(regrid_to_model=True, resample_annual=True,save=True)
-    #gea.plot_caesar_hadisst_comp()
+    #gea.process_hadisst(regrid_to_model=True, resample_annual=True,save=True,
+    #                    mask_seaice=False)
+    gea.plot_caesar_hadisst_comp()
     #gea.get_mean_NA_var(y0=1850, y1=2014, var="tos", grid_str="T")
     #gea.get_NAO(y0=1850, y1=2015)
     #gea.get_NAO_slp()
@@ -1197,6 +1241,6 @@ if __name__ == "__main__":
     #gea.get_barotropic_stream_function(y0=1940, y1=1960)
     #gea.create_sea_ice_area_sum()
 
-    #gea.render_ensemble_sea_ice()
+     #gea.render_ensemble_sea_ice()
     #plt.show()
 #plt.savefig("sea_ice_area.png")
