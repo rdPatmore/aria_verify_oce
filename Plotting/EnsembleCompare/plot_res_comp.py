@@ -1,4 +1,4 @@
-from plot_ensemble import glosat_ensemble_analysis
+from Plotting.EnsembleCompare.plot_ensemble import glosat_ensemble_analysis
 import glob
 import xarray as xr
 import matplotlib.pyplot as plt
@@ -9,13 +9,24 @@ from scipy.interpolate import griddata
 class NEMO_case(object):
 
     def __init__(self, case, dom_cfg=None, zcoord="MES"):
-        root = "/gws/ssde/j25a/verify_oce/NEMO/"
-        self.nemo_path = root + "Outputs/" 
+        self.case_name = case
+        self.zcoord = zcoord
+        self.root = "/gws/ssde/j25a/verify_oce/NEMO/"
+        self.nemo_path = self.root + "Outputs/" 
         self.case_path = self.nemo_path + case
         if dom_cfg:
-            self.dom_path = root + "Preprocessing/DOM/NAARC/" + dom_cfg
-        self.save_path = root + f"PostProcessing/NAARC/{zcoord}/"
+            self.dom_path = self.root + "Preprocessing/DOM/NAARC/" + dom_cfg
+        self.save_path = self.root + f"PostProcessing/NAARC/{case}/"
 
+
+    def get_paths(self, y, freq="1m", grid="grid_T"):
+
+        paths = glob.glob(self.case_path + "/" + str(y) +
+                         f"/*/*{freq}*{grid}.nc")
+        print (paths)
+        print (self.case_path)
+        
+        return paths
 
     def calc_barotropic_stream_function(self, y0, y1):
         """
@@ -77,12 +88,71 @@ class NEMO_case(object):
         """ access saved bsf """
         self.bsf = xr.open_dataarray(self.save_path + 
                              f"BSF_{y0}_{y1-1}.nc")
+        return self.bsf
+
+    def get_tos(self, y0, y1):
+        self.tos = xr.open_dataarray(self.save_path + 
+                             f"naarc_SPG_tos_{y0}_{y1}.nc")
+        return self.tos
 
     def get_density_snapshot(self, yyyy, mm):
         """ access density """
         self.rho = xr.open_dataset(self.case_path +
               f"/{yyyy}/{mm}/VERIFY_1m_{yyyy}{mm}01_{yyyy}{mm}30_grid_T.nc",
                 chunks="auto").rhop
+
+    def restrict_to_SPG(self, da):
+        lat_lims = [45,65]
+        lon_lims = [-60,10]
+
+        # restrict to area
+        da = da.where((da.nav_lon > lon_lims[0]) &
+                      (da.nav_lon < lon_lims[1]) &
+                      (da.nav_lat > lat_lims[0]) &
+                      (da.nav_lat < lat_lims[1]), drop=False)
+        #da = da.isel(x=slice(1,-1), y=slice(None,-1))
+
+        return da
+
+    def area_mean(self, da, weights):
+
+        da = self.restrict_to_SPG(da)
+
+        # area weighted mean
+        da = da.weighted(weights).mean(["x","y"])
+
+        return da
+
+    def calc_SPG_temperature_naarc(self, y0, y1):
+        """ get 2d spg tos """
+
+        # get area
+        #case = NEMO_case(case=case_dict["case"],
+                         #dom_cfg=case_dict["domcfg"],
+                         #zcoord=case_dict["zcoord"])
+        domcfg = xr.open_dataset(self.dom_path, chunks="auto").squeeze()
+        area = (domcfg.e1f * domcfg.e2f)
+
+        y_set = []
+        for y in range(y0, y1):
+            print (y)
+            year_paths = self.get_paths(y)
+            m_set = []
+            for path in year_paths:
+                print (path)
+                month_da = xr.open_dataset(path, chunks="auto").thetao_con
+                top_month_da = month_da.isel(deptht=0)
+                m_set.append(self.restrict_to_SPG(top_month_da))
+            temp_series_year = xr.concat(m_set, "time_counter")
+
+            y_set.append(temp_series_year)
+
+        temp_series_full = xr.concat(y_set, "time_counter")
+        temp_series_full = temp_series_full.assign_attrs(
+                   {"case":self.case_name})
+
+        fn = self.save_path + f"naarc_SPG_tos_2d_{y0}_{y1}.nc"
+        temp_series_full.to_netcdf(fn)
 
     def interpolate_to_pts(self, da, tgt_lons, tgt_lats):
         """ interpolate to section """
@@ -92,21 +162,36 @@ class NEMO_case(object):
 
         lons = da.nav_lon.load()
         lats = da.nav_lat.load()
-        print (tgt_lons)
 
-        da = da.where((lons > tgt_lons[0]) &
-                      (lons < tgt_lons[-1]) &
-                      (lats > tgt_lats[0]) &
-                      (lats < tgt_lats[-1]), drop=True)
+        # restrict to area of section
+        with ProgressBar():
+            da = da.where((lons > tgt_lons[0]) &
+                          (lons < tgt_lons[-1]) &
+                          (lats > tgt_lats[0]) &
+                          (lats < tgt_lats[-1]), drop=True).load()
 
-        domcfg = domcfg.where((lons > tgt_lons[0]) &
-                              (lons < tgt_lons[-1]) &
-                              (lats > tgt_lats[0]) &
-                              (lats < tgt_lats[-1]), drop=True)
+            domcfg = domcfg.where((lons > tgt_lons[0]) &
+                                  (lons < tgt_lons[-1]) &
+                                  (lats > tgt_lats[0]) &
+                                  (lats < tgt_lats[-1]), drop=True).load()
 
-        target = (tgt_lons, tgt_lats)
 
-        src_mdep = np.nan_to_num(domcfg.gdept_0.stack(z=("x","y","nav_lev")).values, nan=-9999)
+        tgt_deps = domcfg.gdept_1d.values
+        print (domcfg.data_vars)
+        print (domcfg)
+        print (asdkf)
+        print (tgt_lons.shape)
+        print (tgt_lats.shape)
+        print (tgt_deps.shape)
+        tgt_mlons, _ = np.meshgrid(tgt_lons, tgt_deps)
+        tgt_mlats, tgt_mdeps = np.meshgrid(tgt_lats, tgt_deps)
+        print (tgt_mlons.shape)
+        print (tgt_mlats.shape)
+        print (tgt_mdeps.shape)
+        target = (tgt_mlons, tgt_mlats, tgt_mdeps)
+
+        src_mdep = np.nan_to_num(
+                 domcfg.gdept_0.stack(z=("x","y","nav_lev")).values, nan=-9999)
         src_mlon = da.nav_lon.broadcast_like(domcfg.gdept_0).values
         src_mlat = da.nav_lat.broadcast_like(domcfg.gdept_0).values
 
@@ -118,14 +203,14 @@ class NEMO_case(object):
         print (values_masked.shape)
             
         n_grid_all = griddata(points, values_masked, target,
-                              method="linear")[:,:,np.newaxis]
+                              method="linear")
 
         section = xr.DataArray(
                              data=n_grid_all,
-                             dims=["d","time"],
+                             dims=["d","depth"],
                              coords={"longitude": (["d"],tgt_lon.values),
                                      "latitude": (["d"], tgt_lat.values),
-                                     "time": self.da.time},
+                                     "depth": tgt_deps.values},
                              name=self.var_str)
         return section
 
@@ -157,14 +242,18 @@ class NEMO_compare(object):
     """
 
     def __init__(self, case_dict):
+        self.root = "/gws/ssde/j25a/verify_oce/NEMO/"
         self.nemo_path = "/gws/ssde/j25a/verify_oce/NEMO/Outputs/"
         self.mes_case = "EXP_mes_LSM_new_radiation/"
         self.zlevel_case = "EXP_zlevel_LSM_new_radiation/"
 
         self.cases = {}
         for i in range(len(case_dict)):
-            self.cases = {f"case{i}": NEMO_case(case_dict[0]["case"],
-                            dom_cfg="domain_cfg_mes.nc")}
+            self.cases[f"case{i}"] = NEMO_case(case_dict[i]["case"],
+                                       dom_cfg=case_dict[i]["dom_cfg"],
+                                       zcoord=case_dict[i]["zcoord"])
+            self.cases[f"case{i}"].y0 = case_dict[i]["y0"]
+            self.cases[f"case{i}"].y1 = case_dict[i]["y1"]
     
     def get_glosat_var(self, y, var, grid_str):
     
@@ -197,22 +286,142 @@ class NEMO_compare(object):
         diff.plot(ax=axs[2], vmin=-2, vmax=2)
         plt.show()
 
-    def plot_bsf_timeseries(self, y0, y1):
+    def plot_bsf_timeseries(self, y0, y1, add_glosat=True):
         """
         compare barotropic streamfunction timeseries for multiple cases
         """
 
         # initialise figure
-        fig, axs = plt.subplots(3, figsize=(5,12))
+        fig, ax = plt.subplots(1, figsize=(5,3))
+        plt.subplots_adjust(bottom=0.2, top=0.98)
+        
+        gea = glosat_ensemble_analysis()
 
         # get streamfunctions
         print (self.cases)
         for i in range(len(self.cases)):
-             self.cases[f"case{i}"].get_barotropic_stream_function(y0, y1)
+             bsf = self.cases[f"case{i}"].get_barotropic_stream_function(y0, y1)
+             bsf = bsf.convert_calendar(calendar='gregorian',
+                     dim="time_centered", align_on='date')
+             bsf_na = gea.restrict_to_NA(bsf, domain="ocean")
+             SPG = bsf_na.max(["x","y"])
+             ax.plot(SPG.time_centered, SPG, label=self.cases[f"case{i}"].zcoord)
+             #axs[i+1].pcolor(bsf.nav_lon, bsf.nav_lat, bsf)
+        if add_glosat:
+             path="/gws/ssde/j25a/verify_oce/NEMO/PostProcessing/GloSat/u-ck651/"
+             bsf = xr.open_dataarray(path + "glosat_annual_mean_BSF_1850_2015.nc")
+             bsf_na = gea.restrict_to_NA(bsf, domain="ocean")
+             SPG = bsf_na.max(["x","y"])
+             time_min = str(SPG.year.min().values)
+             time_max = str(SPG.year.max().values)
+             time_max = str(np.datetime64(time_max) + np.timedelta64(1,"Y"))
+             print (time_max)
+             
+             time = np.arange(time_min, time_max, dtype="datetime64[Y]")
+             ax.plot(time, SPG, label="GloSat")
 
-        axs[0].pcolormesh(self.cases["case0"].bsf.isel(year=-1).T)
-        plt.show()
+        ax.legend()
+        ax.set_ylabel("SPG strength (Sv)")
+        ax.set_xlabel("Date")
+        plt.savefig(self.root + "PostProcessing/Plots/bsf_comp.png", dpi=600)
 
+        #axs[0].pcolormesh(self.cases["case0"].bsf.isel(time_centered=-1).T)
+        #plt.show()
+
+    def plot_tos_timeseries(self, y0, y1, add_glosat=True):
+        """ """
+
+        fig, ax = plt.subplots(1, figsize=(5,3))
+        plt.subplots_adjust(bottom=0.2, top=0.98)
+
+        for i in range(len(self.cases)):
+             tos = self.cases[f"case{i}"].get_tos(y0, y1)
+             tos = tos.convert_calendar(calendar='gregorian',
+                     dim="time_counter", align_on='date')
+
+
+             ax.plot(tos.time_counter, tos, label=self.cases[f"case{i}"].zcoord,
+                     lw=0.5)
+
+        if add_glosat:
+             path="/gws/ssde/j25a/verify_oce/NEMO/PostProcessing/GloSat/u-ck651/"
+             tos = xr.open_dataarray(path + "glosat_SPG_tos_1850_2015.nc")
+             tos = tos.convert_calendar(calendar='gregorian',
+                     dim="time_centered", align_on='date')
+
+             ax.plot(tos.time_centered, tos, label="GloSat", lw=0.5)
+        ax.legend()
+
+        ax.set_ylabel("SPG Sea Surface Temperature")
+        ax.set_xlabel("Date")
+        plt.savefig(self.root + "PostProcessing/Plots/tos_comp.png", dpi=600)
+
+    def plot_tos_bsf_timeseries(self, add_glosat=True):
+        """ plot sea surface temperature and barotropic streamfunction """
+        ### under construction 28 June 2026 ###
+        ### note to RDP ###
+
+        fig, axs = plt.subplots(2, figsize=(5.5,3))
+        plt.subplots_adjust(bottom=0.15, top=0.98, right=0.95, hspace=0.1)
+
+        for i in range(len(self.cases)):
+             case = self.cases[f"case{i}"]
+             y0 = case.y0
+             y1 = case.y1
+             tos = case.get_tos(y0, y1)
+             tos = tos.convert_calendar(calendar='gregorian',
+                     dim="time_counter", align_on='date')
+
+
+             axs[0].plot(tos.time_counter, tos, label=self.cases[f"case{i}"].zcoord,
+                     lw=1.0)
+
+        if add_glosat:
+             path="/gws/ssde/j25a/verify_oce/NEMO/PostProcessing/GloSat/u-ck651/"
+             tos = xr.open_dataarray(path + "glosat_SPG_tos_1850_2015.nc")
+             tos = tos.convert_calendar(calendar='gregorian',
+                     dim="time_centered", align_on='date')
+
+             axs[0].plot(tos.time_centered, tos, label="GloSat", lw=1.0)
+        axs[0].legend(loc="upper right")
+
+        axs[0].set_ylabel("SPG Sea Surface\nTemperature")
+        
+        gea = glosat_ensemble_analysis()
+
+        # get streamfunctions
+        print (self.cases)
+        for i in range(len(self.cases)):
+             case = self.cases[f"case{i}"]
+             y0 = case.y0
+             y1 = case.y1
+             bsf = case.get_barotropic_stream_function(y0, y1)
+             bsf = bsf.convert_calendar(calendar='gregorian',
+                     dim="time_centered", align_on='date')
+             bsf_na = gea.restrict_to_NA(bsf, domain="ocean")
+             SPG = bsf_na.max(["x","y"])
+             axs[1].plot(SPG.time_centered, SPG, label=case.zcoord, lw=1.0)
+        if add_glosat:
+             path="/gws/ssde/j25a/verify_oce/NEMO/PostProcessing/GloSat/u-ck651/"
+             bsf = xr.open_dataarray(path + "glosat_annual_mean_BSF_1850_2015.nc")
+             bsf_na = gea.restrict_to_NA(bsf, domain="ocean")
+             SPG = bsf_na.max(["x","y"])
+             time_min = str(SPG.year.min().values)
+             time_max = str(SPG.year.max().values)
+             time_max = str(np.datetime64(time_max) + np.timedelta64(1,"Y"))
+             print (time_max)
+             
+             time = np.arange(time_min, time_max, dtype="datetime64[Y]")
+             axs[1].plot(time, SPG, label="GloSat", lw=1.0)
+
+        axs[1].set_ylabel("SPG strength\n(Sv)")
+        axs[1].set_xlabel("Date")
+        axs[0].set_xticklabels([])
+        for ax in axs:
+            ax.set_xlim(np.datetime64("1850-01-01"),
+                        np.datetime64("1860-01-01"))
+        plt.savefig(self.root + "PostProcessing/Plots/tos_bsf_comp_new.png",
+                    dpi=600)
 
     def plot_denmark_strait(self):
         """
@@ -231,21 +440,47 @@ class NEMO_compare(object):
              sec = mod.extract_section(mod.rho)
 
         # plot section
+        print (sec)
+        print(dskfj)
 
-case = NEMO_case("EXP_mes_LSM_new_radiation", "domain_cfg_mes.nc")
-#case.calc_barotropic_stream_function(1850, 1858)
-#case = NEMO_case("EXP_zlevel_LSM_new_radiation", "domain_cfg_zps.nc",
-#        zcoord="ZPS")
-case.calc_barotropic_stream_function(1850, 1860)
-#case_dict = [{"case": "EXP_mes_LSM_new_radiation"}]
-#nemo_comp = NEMO_compare(case_dict)
-#nemo_comp.plot_denmark_strait()
-
-#case_dict = [{"case": "EXP_mes_LSM_new_radiation"}]
-#comp = NEMO_compare(case_dict, 1850, 1854)
-#comp.plot_bsf_timeseries()
-
-
-#nemo_comp.get_nemo("1854/12/VERIFY_1m_18541201_18541230_grid_T.nc", "tos_con")
-#nemo_comp.plot_nemo()
-
+if __name__ == "__main__":
+    #case = NEMO_case("EXP_mes_LSM_unlim_time", "domain_cfg_mes.nc")
+    #case.calc_barotropic_stream_function(1850, 1851)
+    #case.calc_SPG_temperature_naarc(1850, 1851)
+    #case = NEMO_case("EXP_zlevel_LSM_new_radiation", "domain_cfg_zps.nc",
+    #        zcoord="ZPS")
+    #case.calc_barotropic_stream_function(1850, 1860)
+    
+    #case_dict = [{"case": "EXP_mes_LSM_new_radiation"}]
+    #nemo_comp = NEMO_compare(case_dict)
+    #nemo_comp.plot_denmark_strait()
+    
+    def plot_tos_bsf_compare():
+        case_dict = [{"case": "EXP_mes_LSM_new_radiation",
+                      "dom_cfg":"domain_cfg_mes.nc",
+                      "zcoord":"MES",
+                      "y0":1850,
+                      "y1":1860},
+                {"case": "EXP_zlevel_LSM_new_radiation", 
+                    "dom_cfg":"domain_cfg_zps_gdept.nc",
+                    "zcoord":"ZPS",
+                      "y0":1850,
+                      "y1":1860},
+                {"case": "EXP_mes_LSM_unlim_time",
+                      "dom_cfg":"domain_cfg_mes.nc",
+                      "zcoord":"MES",
+                      "y0":1850,
+                      "y1":1851}]
+        comp = NEMO_compare(case_dict)
+        comp.plot_tos_bsf_timeseries()
+    plot_tos_bsf_compare()
+    #case.plot_tos_timeseries(y0, y1)
+    #case.plot_bsf_timeseries(y0, y1)
+    #for case_i in [case_dict[0]]:
+    #    case = NEMO_case(**case_i)
+    #    #case.calc_SPG_temperature_naarc(1950, 1952)
+    
+    
+    #nemo_comp.get_nemo("1854/12/VERIFY_1m_18541201_18541230_grid_T.nc", "tos_con")
+    #nemo_comp.plot_nemo()
+    

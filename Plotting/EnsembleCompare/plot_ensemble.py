@@ -17,6 +17,9 @@ import os
 import dask
 from dask.distributed import Client, LocalCluster
 
+import matplotlib 
+matplotlib.rcParams.update({'font.size': 8})
+
 class glosat_ensemble_analysis(object):
     def __init__(self, ensemble_member=None):
         self.glosat_path = "/gws/ssde/j25a/glosat/production/UKESM/raw/"
@@ -140,6 +143,22 @@ class glosat_ensemble_analysis(object):
         axs[0].set_ylabel(r"Sea Ice Area (m$^2$)")
         axs[1].set_ylabel(r"Sea Ice Area Cycle (m$^2$)")
         plt.savefig("sea_ice_area.png", dpi=600)
+
+    def area_mean(self, da, weights):
+        lat_lims = [45,65]
+        lon_lims = [-60,10]
+
+        # restrict to area
+        da = da.where((da.nav_lon > lon_lims[0]) &
+                      (da.nav_lon < lon_lims[1]) &
+                      (da.nav_lat > lat_lims[0]) &
+                      (da.nav_lat < lat_lims[1]), drop=False)
+        #da = da.isel(x=slice(1,-1), y=slice(None,-1))
+
+        # area weighted mean
+        da = da.weighted(weights).mean(["x","y"])
+
+        return da
 
     def get_sea_ice_area_std(self):
         """ get sea ice standard deviation timeseries"""
@@ -877,18 +896,20 @@ class glosat_ensemble_analysis(object):
                 "time_counter")
 
         #plotting
-        fig, axs = plt.subplots(2, figsize=(5.5,5.5))
+        fig, axs = plt.subplots(2, figsize=(3.5,4.0))
+        plt.subplots_adjust(top=0.95, right=0.99, left=0.18, hspace=0.1)
+        lw=1
         axs[0].plot(hadisst_anom.time_counter, hadisst_anom,
-                    label="hadisst")
+                    label="hadisst", lw=lw)
         axs[0].plot(hadisst_spg_fit.time_counter, hadisst_spg_fit,
-                        c="k")
-        axs[0].plot(TOS_anom_fit.time_counter, TOS_anom_fit, c="k")
+                        c="k", lw=lw)
+        axs[0].plot(TOS_anom_fit.time_counter, TOS_anom_fit, c="k", lw=lw)
         axs[0].plot(TOS_anom.time_counter, TOS_anom,
-                    label="GloSat UKESM")
+                    label="GloSat UKESM", lw=lw)
         axs[1].plot(hadisst_mean_global.time_counter, hadisst_mean_global,
-                    label="hadisst")
+                    label="hadisst", lw=lw)
         axs[1].plot(mean_global_TOS.time_counter, mean_global_TOS,
-                    label="GloSat UKESM")
+                    label="GloSat UKESM", lw=lw)
         axs[0].legend()
 
         for ax in axs:
@@ -897,6 +918,9 @@ class glosat_ensemble_analysis(object):
         axs[1].set_xlabel("Date")
         axs[0].set_ylabel("Subpolar Gyre Temperature\nAnomaly from Global Mean")
         axs[1].set_ylabel("Global Mean Temperature")
+
+        # remove ticklabels
+        axs[0].set_xticklabels([])
 
         # save
         plt.savefig("Figs/GloSat_HadiSST_SPG_temperature_comparison.png",

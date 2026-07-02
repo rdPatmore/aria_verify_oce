@@ -39,6 +39,28 @@ def add_verify_timeseries():
             
             add_data.add_data_to_cloud(ds, fn, repo, commit_str)
 
+def add_dummy():
+    gea = glosat_ensemble_analysis()
+    member = gea.ensemble_list[0]
+
+    # get glosat data
+    path = f"/gws/ssde/j25a/verify_oce/NEMO/PostProcessing/GloSat/{member}/"
+    da = xr.open_dataarray(path + "glosat_AMOC_1850_2015.nc")
+
+    da_dummy = shift_and_scale(da)
+    
+    fn = f"GloSat/{member}_dummy/AMOC_1850_2014"
+    repo = "ARIA-VERIFY/verify-benchmarking-repo"
+    commit_str =  f"addtion of glosat dummy AMOC time series"
+    
+    add_data.add_data_to_cloud(da_dummy, fn, repo, commit_str)
+
+def shift_and_scale(ds):
+    """ shift and scale the maginitude of data """
+
+    ds = ds * 100 + 1000
+
+    return ds
 
 def delete_errornous_dirs():
     gea = glosat_ensemble_analysis()
@@ -49,4 +71,4 @@ def delete_errornous_dirs():
         path = f"GloSat_{member}"
         repo = "ARIA-VERIFY/verify-benchmarking-repo"
         add_data.delete_cloud_dir(path, repo, commit_str)
-add_verify_timeseries()
+add_dummy()

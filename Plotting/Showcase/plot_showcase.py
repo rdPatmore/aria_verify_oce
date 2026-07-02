@@ -18,7 +18,7 @@ matplotlib.rcParams.update({'font.size': 8})
 
 class glosat_ensemble_analysis(object):
     def __init__(self):
-        self.glosat_path = "/gws/nopw/j04/glosat/production/UKESM/raw/"
+        self.glosat_path = "/gws/ssde/j25a/glosat/production/UKESM/raw/"
         self.verify_root = "/gws/ssde/j25a/verify_oce/NEMO/"
         self.save_path = self.verify_root + "PostProcessing/"
         
@@ -47,7 +47,7 @@ class glosat_ensemble_analysis(object):
     #    print (ds)
     #    return ds.aice
     
-    def plot_naarc_glosat_compare(self):
+    def plot_naarc_glosat_compare(self, year=1850):
         """ plot a resolution comparison between NAARC and GloSAT """
 
         # initialise figure
@@ -63,18 +63,18 @@ class glosat_ensemble_analysis(object):
         
         # get glosat data
         ds = xr.open_dataset(self.glosat_path + self.ensemble_list[0] + 
-                   "/18510101T0000Z/nemo_ck651o_1m_18501201-18510101_grid-T.nc")
+        f"/{year+1}0101T0000Z/nemo_ck651o_1m_{year}1201-{year+1}0101_grid-T.nc")
         ds_ice = xr.open_dataset(self.glosat_path + self.ensemble_list[0] + 
-                   "/18510101T0000Z/cice_ck651i_1m_18501201-18510101.nc")
+        f"/{year+1}0101T0000Z/cice_ck651i_1m_{year}1201-{year+1}0101.nc")
 
         ice_gs = ds_ice.aice.squeeze()
         tos_gs = ds.tos.squeeze()
 
         # get NAARC
-        data_path = "Outputs/EXP_mes_LSM_new_radiation/1850/12/"
-        fn = "VERIFY_6h_18501201_18501230_grid_T.nc"
+        data_path = f"Outputs/EXP_mes_LSM_new_radiation/{year}/12/"
+        fn = f"VERIFY_6h_{year}1201_{year}1230_grid_T.nc"
         ds = xr.open_dataset(self.verify_root + data_path + fn)
-        fn = "VERIFY_1m_18501201_18501230_icemod.nc"
+        fn = f"VERIFY_1m_{year}1201_{year}1230_icemod_snap.nc"
         ds_ice = xr.open_dataset(self.verify_root + data_path + fn)
 
         tos_na = ds.sst_con.isel(time_counter=60)
@@ -136,8 +136,8 @@ class glosat_ensemble_analysis(object):
         axs[0].set_title(r"GloSat $1^{\circ}$")
         axs[1].set_title(r"NAARC $1/12^{\circ}$")
 
-        plt.savefig(self.save_path + "Plots/naarc_glosat_compare.png",
+        plt.savefig(self.save_path + f"Plots/naarc_glosat_compare_{year}12.png",
                     dpi=1200)
 
 gea = glosat_ensemble_analysis()
-gea.plot_naarc_glosat_compare()
+gea.plot_naarc_glosat_compare(1859)
