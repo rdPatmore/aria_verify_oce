@@ -97,11 +97,12 @@ class timeseries(object):
 
 ts = timeseries("","")
 #ts.get_AMOC_glosat_ens(1850,2015)
-case_dict = {"case": "EXP_mes_LSM_unlim_time",
+case_dict = {"case": "EXP_mes_climatology_1850_1870_fw10",
               "domcfg":"domain_cfg_mes.nc",
               "zcoord":"MES"}
-#case_dict = {"case": "EXP_zlevel_LSM_new_radiation",
-#              "domcfg":"domain_cfg_zps_gdept.nc",
-#              "zcoord":"ZPS"}
-ts.calc_SPG_temperature_timeseries_naarc(1850, 1851, case_dict)
+ts.calc_SPG_temperature_timeseries_naarc(1855, 1860, case_dict)
+case_dict = {"case": "EXP_mes_climatology_1850_1870",
+              "domcfg":"domain_cfg_mes.nc",
+              "zcoord":"MES"}
+ts.calc_SPG_temperature_timeseries_naarc(1950, 1960, case_dict)
 #ts.calc_SPG_temperature_glosat_ens(1850,2015)

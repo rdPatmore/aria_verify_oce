@@ -47,7 +47,7 @@ class glosat_ensemble_analysis(object):
     #    print (ds)
     #    return ds.aice
     
-    def plot_naarc_glosat_compare(self, year=1850):
+    def plot_naarc_glosat_compare(self, case, year=1850):
         """ plot a resolution comparison between NAARC and GloSAT """
 
         # initialise figure
@@ -71,13 +71,13 @@ class glosat_ensemble_analysis(object):
         tos_gs = ds.tos.squeeze()
 
         # get NAARC
-        data_path = f"Outputs/EXP_mes_LSM_new_radiation/{year}/12/"
-        fn = f"VERIFY_6h_{year}1201_{year}1230_grid_T.nc"
+        data_path = f"Outputs/Historical/{case}/{year}/12/"
+        fn = f"VERIFY_1m_{year}1201_{year}1230_grid_T_snapshot.nc"
         ds = xr.open_dataset(self.verify_root + data_path + fn)
-        fn = f"VERIFY_1m_{year}1201_{year}1230_icemod_snap.nc"
+        fn = f"VERIFY_1m_{year}1201_{year}1230_icemod.nc"
         ds_ice = xr.open_dataset(self.verify_root + data_path + fn)
 
-        tos_na = ds.sst_con.isel(time_counter=60)
+        tos_na = ds.sst_con.squeeze()#.isel(time_counter=60)
         ice_na = ds_ice.siconc.squeeze()
 
         # plot glosat
@@ -136,8 +136,8 @@ class glosat_ensemble_analysis(object):
         axs[0].set_title(r"GloSat $1^{\circ}$")
         axs[1].set_title(r"NAARC $1/12^{\circ}$")
 
-        plt.savefig(self.save_path + f"Plots/naarc_glosat_compare_{year}12.png",
+        plt.savefig(self.save_path + f"Plots/naarc_glosat_compare_{case}_{year}12.png",
                     dpi=1200)
 
 gea = glosat_ensemble_analysis()
-gea.plot_naarc_glosat_compare(1859)
+gea.plot_naarc_glosat_compare(case="EXP_zps_transient_1850", year=1859)

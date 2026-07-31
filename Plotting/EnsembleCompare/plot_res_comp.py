@@ -8,11 +8,12 @@ from scipy.interpolate import griddata
 
 class NEMO_case(object):
 
-    def __init__(self, case, dom_cfg=None, zcoord="MES"):
+    def __init__(self, case, dom_cfg=None, zcoord="MES", label=""):
         self.case_name = case
         self.zcoord = zcoord
+        self.label = label
         self.root = "/gws/ssde/j25a/verify_oce/NEMO/"
-        self.nemo_path = self.root + "Outputs/" 
+        self.nemo_path = self.root + "Outputs/Historical/" 
         self.case_path = self.nemo_path + case
         if dom_cfg:
             self.dom_path = self.root + "Preprocessing/DOM/NAARC/" + dom_cfg
@@ -251,7 +252,8 @@ class NEMO_compare(object):
         for i in range(len(case_dict)):
             self.cases[f"case{i}"] = NEMO_case(case_dict[i]["case"],
                                        dom_cfg=case_dict[i]["dom_cfg"],
-                                       zcoord=case_dict[i]["zcoord"])
+                                       zcoord=case_dict[i]["zcoord"],
+                                       label=case_dict[i]["label"])
             self.cases[f"case{i}"].y0 = case_dict[i]["y0"]
             self.cases[f"case{i}"].y1 = case_dict[i]["y1"]
     
@@ -373,7 +375,7 @@ class NEMO_compare(object):
                      dim="time_counter", align_on='date')
 
 
-             axs[0].plot(tos.time_counter, tos, label=self.cases[f"case{i}"].zcoord,
+             axs[0].plot(tos.time_counter, tos, label=self.cases[f"case{i}"].label,
                      lw=1.0)
 
         if add_glosat:
@@ -383,7 +385,6 @@ class NEMO_compare(object):
                      dim="time_centered", align_on='date')
 
              axs[0].plot(tos.time_centered, tos, label="GloSat", lw=1.0)
-        axs[0].legend(loc="upper right")
 
         axs[0].set_ylabel("SPG Sea Surface\nTemperature")
         
@@ -400,7 +401,7 @@ class NEMO_compare(object):
                      dim="time_centered", align_on='date')
              bsf_na = gea.restrict_to_NA(bsf, domain="ocean")
              SPG = bsf_na.max(["x","y"])
-             axs[1].plot(SPG.time_centered, SPG, label=case.zcoord, lw=1.0)
+             axs[1].plot(SPG.time_centered, SPG, label=case.label, lw=1.0)
         if add_glosat:
              path="/gws/ssde/j25a/verify_oce/NEMO/PostProcessing/GloSat/u-ck651/"
              bsf = xr.open_dataarray(path + "glosat_annual_mean_BSF_1850_2015.nc")
@@ -414,12 +415,13 @@ class NEMO_compare(object):
              time = np.arange(time_min, time_max, dtype="datetime64[Y]")
              axs[1].plot(time, SPG, label="GloSat", lw=1.0)
 
+        axs[1].legend(loc="upper left")
         axs[1].set_ylabel("SPG strength\n(Sv)")
         axs[1].set_xlabel("Date")
         axs[0].set_xticklabels([])
         for ax in axs:
             ax.set_xlim(np.datetime64("1850-01-01"),
-                        np.datetime64("1860-01-01"))
+                        np.datetime64("1970-01-01"))
         plt.savefig(self.root + "PostProcessing/Plots/tos_bsf_comp_new.png",
                     dpi=600)
 
@@ -444,33 +446,29 @@ class NEMO_compare(object):
         print(dskfj)
 
 if __name__ == "__main__":
-    #case = NEMO_case("EXP_mes_LSM_unlim_time", "domain_cfg_mes.nc")
-    #case.calc_barotropic_stream_function(1850, 1851)
-    #case.calc_SPG_temperature_naarc(1850, 1851)
-    #case = NEMO_case("EXP_zlevel_LSM_new_radiation", "domain_cfg_zps.nc",
-    #        zcoord="ZPS")
-    #case.calc_barotropic_stream_function(1850, 1860)
+    #case = NEMO_case("EXP_mes_climatology_1850_1870", "domain_cfg_mes.nc")
+    #case.calc_barotropic_stream_function(1850, 1855)
+    #case.calc_SPG_temperature_naarc(1850, 1854)
+    #case = NEMO_case("EXP_mes_climatology_1950_1970", "domain_cfg_mes.nc")
+    #case.calc_barotropic_stream_function(1950, 1961)
     
     #case_dict = [{"case": "EXP_mes_LSM_new_radiation"}]
     #nemo_comp = NEMO_compare(case_dict)
     #nemo_comp.plot_denmark_strait()
     
     def plot_tos_bsf_compare():
-        case_dict = [{"case": "EXP_mes_LSM_new_radiation",
+        case_dict = [{"case": "EXP_mes_climatology_1850_1870",
                       "dom_cfg":"domain_cfg_mes.nc",
                       "zcoord":"MES",
+                      "label":"1850",
                       "y0":1850,
-                      "y1":1860},
-                {"case": "EXP_zlevel_LSM_new_radiation", 
-                    "dom_cfg":"domain_cfg_zps_gdept.nc",
-                    "zcoord":"ZPS",
-                      "y0":1850,
-                      "y1":1860},
-                {"case": "EXP_mes_LSM_unlim_time",
+                      "y1":1855},
+                {"case": "EXP_mes_climatology_1950_1970", 
                       "dom_cfg":"domain_cfg_mes.nc",
                       "zcoord":"MES",
-                      "y0":1850,
-                      "y1":1851}]
+                      "label":"1950",
+                      "y0":1950,
+                      "y1":1961}]
         comp = NEMO_compare(case_dict)
         comp.plot_tos_bsf_timeseries()
     plot_tos_bsf_compare()
