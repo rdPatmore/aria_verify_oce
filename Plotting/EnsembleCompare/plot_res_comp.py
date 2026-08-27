@@ -420,9 +420,9 @@ class NEMO_compare(object):
         axs[1].set_xlabel("Date")
         axs[0].set_xticklabels([])
         for ax in axs:
-            ax.set_xlim(np.datetime64("1850-01-01"),
-                        np.datetime64("1970-01-01"))
-        plt.savefig(self.root + "PostProcessing/Plots/tos_bsf_comp_new.png",
+            ax.set_xlim(np.datetime64("1855-01-01"),
+                        np.datetime64("1858-01-01"))
+        plt.savefig(self.root + "PostProcessing/Plots/tos_bsf_comp_new_fw.png",
                     dpi=600)
 
     def plot_denmark_strait(self):
@@ -446,29 +446,29 @@ class NEMO_compare(object):
         print(dskfj)
 
 if __name__ == "__main__":
-    #case = NEMO_case("EXP_mes_climatology_1850_1870", "domain_cfg_mes.nc")
-    #case.calc_barotropic_stream_function(1850, 1855)
+    #case = NEMO_case("EXP_mes_climatology_1850_1870_rnf_fix", "domain_cfg_mes.nc")
+    #case.calc_barotropic_stream_function(1855, 1858)
     #case.calc_SPG_temperature_naarc(1850, 1854)
-    #case = NEMO_case("EXP_mes_climatology_1950_1970", "domain_cfg_mes.nc")
-    #case.calc_barotropic_stream_function(1950, 1961)
+    #case = NEMO_case("EXP_mes_climatology_1850_1870_fw10_rnf_fix", "domain_cfg_mes.nc")
+    #case.calc_barotropic_stream_function(1855, 1858)
     
     #case_dict = [{"case": "EXP_mes_LSM_new_radiation"}]
     #nemo_comp = NEMO_compare(case_dict)
     #nemo_comp.plot_denmark_strait()
     
     def plot_tos_bsf_compare():
-        case_dict = [{"case": "EXP_mes_climatology_1850_1870",
+        case_dict = [{"case": "EXP_mes_climatology_1850_1870_rnf_fix",
                       "dom_cfg":"domain_cfg_mes.nc",
                       "zcoord":"MES",
-                      "label":"1850",
-                      "y0":1850,
-                      "y1":1855},
-                {"case": "EXP_mes_climatology_1950_1970", 
+                      "label":"rnf_fw1",
+                      "y0":1855,
+                      "y1":1858},
+                {"case": "EXP_mes_climatology_1850_1870_fw10_rnf_fix", 
                       "dom_cfg":"domain_cfg_mes.nc",
                       "zcoord":"MES",
-                      "label":"1950",
-                      "y0":1950,
-                      "y1":1961}]
+                      "label":"rnf_fw10",
+                      "y0":1855,
+                      "y1":1858}]
         comp = NEMO_compare(case_dict)
         comp.plot_tos_bsf_timeseries()
     plot_tos_bsf_compare()
