@@ -17,6 +17,10 @@ class forcing_perturbation(object):
         self.root = "/gws/ssde/j25a/verify_oce/NEMO/Preprocessing/"
         self.output = "/gws/ssde/j25a/verify_oce/NEMO/Outputs/"
 
+    def get_domcfg(self):
+        self.domcfg = xr.open_dataset(self.root + "DOM/NAARC/domain_cfg_mes.nc",
+                                 chunks=-1).squeeze()
+
     def get_greenland_mask(self, ds, t_val, f_val):
         """
         get greenland mask according to lat-lon limits
@@ -142,7 +146,7 @@ class forcing_perturbation(object):
         plt.colorbar(p)
         plt.show()
 
-    def get_palaeo_routing(self, scenario):
+    def get_palaeo_routing(self, scenario, x, y):
         """ plot palaeo routing """
 
         # get runoff
@@ -151,8 +155,6 @@ class forcing_perturbation(object):
         rnf["lon"] = rnf.lon - 360
 
 
-        # add bounding box
-        x, y = [-85, -120, 20, -45, -85], [35, 90, 90, 35, 35]
         #plt.plot(x, y, marker="o", transform=ccrs.PlateCarree(), color="coral")
 
         rnf = self.extract_box(x, y, rnf)
@@ -204,7 +206,7 @@ class forcing_perturbation(object):
         # Select data inside polygon
         da_polygon = da.where(region_wgts > 0, drop=True)
 
-        return da_polygon
+        return da_polygon, region_wgts
 
     def get_NAARC_coastline(self, domcfg):
         """
@@ -242,28 +244,6 @@ class forcing_perturbation(object):
 
         return coast
 
-    def nearest_coast_index(river_points, coast_points):
-        """
-        For each river point, find the nearest coastline point.
-
-        This is intentionally a simple chunked search. It avoids adding extra
-        dependencies and matches MATLAB's first-minimum behaviour.
-        """
-        nearest = np.empty(river_points.shape[0], dtype=int)
-
-        for start in range(0, river_points.shape[0], CHUNK_SIZE):
-            stop = min(start + CHUNK_SIZE, river_points.shape[0])
-
-            lon_difference = river_points[start:stop, None, 0] \
-                           - coast_points[None, :, 0]
-            lat_difference = river_points[start:stop, None, 1] \
-                           - coast_points[None, :, 1]
-            distance_squared = lon_difference**2 + lat_difference**2
-
-            nearest[start:stop] = np.argmin(distance_squared, axis=1)
-
-        return nearest
-
     def nearest_coast(self, rnf, coast):
 
         
@@ -274,19 +254,19 @@ class forcing_perturbation(object):
                                        pt.lon.values, pt.lat.values)
             argmin = dist.argmin()
             pt = pt.assign_coords(lat=dist.nav_lat[argmin].values,
-                                  lon=dist.nav_lon[argmin].values)
+                                  lon=dist.nav_lon[argmin].values,
+                                  lat_orig=pt.lat,
+                                  lon_orig=pt.lon)
             coast_rnf.append(pt)
         coast_rnf_all = xr.concat(coast_rnf, dim="rnf_pt")
         coast_rnf_all.name = "runoff"
 
-        print (coast_rnf_all)
-        coast_rnf_all = coast_rnf_all.groupby(["lat","lon"]).sum()
-        coast_rnf_all = coast_rnf_all.stack(rnf_pt=["lat","lon"], create_index=False)
-        coast_rnf_all = coast_rnf_all.dropna("rnf_pt")
-        print (coast_rnf_all)
+        coast_rnf_all_agg = coast_rnf_all.groupby(["lat","lon"]).sum()
+        coast_rnf_all_agg = coast_rnf_all_agg.stack(rnf_pt=["lat","lon"], create_index=False)
+        coast_rnf_all_agg = coast_rnf_all_agg.dropna("rnf_pt")
         #dist = cgeo.Geodesic().inverse(pt0, pt1)
 
-        return coast_rnf_all
+        return coast_rnf_all_agg, coast_rnf_all
 
     def haversine_dist(self, lon0, lat0, lon1, lat1):
         """
@@ -304,34 +284,116 @@ class forcing_perturbation(object):
         dlat = lat1 - lat0
         a = np.sin(dlat/2)**2 + np.cos(lat0) * np.cos(lat1) * np.sin(dlon/2)**2
         c = 2 * np.arcsin(a**0.5)
-        r = 6371 # Radius of earth in kilometers. Use 3956 for miles. Determines return value units.
+        r = 6371 # Radius of earth in km
         dist = c * r
-        print (dist)
         return dist
 
-    def map_rnf_to_coastline(self):
+    def map_rnf_to_coastline(self, plot=False):
         domcfg = xr.open_dataset(self.root + "DOM/NAARC/domain_cfg_mes.nc",
                                  chunks=-1).squeeze()
         domcfg = domcfg.set_coords(["nav_lat","nav_lon"])
         top_lev = domcfg.top_level.load()
 
-        print (domcfg)
+        # add bounding box
+        x, y = [-85, -120, 20, -45, -85], [35, 87, 87, 35, 35]
+        
         coast = self.get_NAARC_coastline(domcfg)
-        rnf = self.get_palaeo_routing("8ka")
-        rnf_coast = self.nearest_coast(rnf,coast)
-        top_lev = top_lev.where((top_lev.nav_lat < rnf_coast.lat.max()) & \
-                           (top_lev.nav_lat > rnf_coast.lat.min()) & \
-                           (top_lev.nav_lon < rnf_coast.lon.max()) & \
-                           (top_lev.nav_lon > rnf_coast.lon.min()), drop=True)
+        rnf = self.get_palaeo_routing(self.period, x, y)
+        rnf_coast_agg, rnf_coast = self.nearest_coast(rnf,coast)
 
-        ax = plt.axes(projection=ccrs.PlateCarree())
-        #ax.coastlines()
-        ax.pcolor(top_lev.nav_lon, top_lev.nav_lat, top_lev,
-                  transform=ccrs.PlateCarree())
-        ax.scatter(rnf.lon, rnf.lat, c="r", s=2, transform=ccrs.PlateCarree())
-        ax.scatter(rnf_coast.lon, rnf_coast.lat, c="k",s=2,  transform=ccrs.PlateCarree())
-        #plt.plot(x, y, marker="o", transform=ccrs.PlateCarree(), color="coral")
-        plt.savefig("rnf_8ka.png", dpi=600)
+        if plot:
+            top_lev = top_lev.where((top_lev.nav_lat < 90) & \
+                               (top_lev.nav_lat > 30) & \
+                               (top_lev.nav_lon < 22) & \
+                               (top_lev.nav_lon > -122), drop=True)
+
+            top_lev = top_lev.where(top_lev == 0)
+
+            plt.figure(figsize=(6.5,3.5))
+            ax = plt.axes(projection=ccrs.PlateCarree())
+            #ax.coastlines()
+            ax.pcolor(top_lev.nav_lon, top_lev.nav_lat, top_lev,
+                      transform=ccrs.PlateCarree())
+            lnk_lons = np.array(list(zip(rnf_coast.lon_orig.values, rnf_coast.lon.values)))
+            lnk_lats = np.array(list(zip(rnf_coast.lat_orig.values, rnf_coast.lat.values)))
+            print (lnk_lats)
+            ax.plot(lnk_lons.T, lnk_lats.T, color="c", lw=0.3,
+                    transform=ccrs.PlateCarree())
+
+            ax.scatter(rnf.lon, rnf.lat, c="r", s=0.5, 
+                       transform=ccrs.PlateCarree(), marker=".")
+            ax.scatter(rnf_coast.lon, rnf_coast.lat, c="c",s=0.5,
+                       transform=ccrs.PlateCarree(), marker=".")
+            plt.plot(x, y, marker="o", transform=ccrs.PlateCarree(), color="coral",
+                      lw=0.8, markersize=2)
+            ax.set_xlim(-122,22)
+            ax.set_ylim(30,90)
+            plt.savefig("rnf_8ka.png", dpi=600)
+
+        return rnf_coast_agg
+
+    def format_for_NEMO(self, rnf, domcfg):
+        """
+        """
+
+        # move from kg s^-1 to kg m^-2 s^-1
+        area = domcfg.e1t * domcfg.e2t 
+        rnf_nemo = rnf * area
+        rnf_nemo.name = "runoff"
+        rnf_msk = xr.where(rnf > 0, 1, 0) 
+        rnf_msk.name = "runoff_mask"
+
+        rnf_ds = xr.merge(rnf_msk, rnf_nemo)
+        print (rnf_ds)
+        print (FDHkj)
+
+    def scale_Sv(self, rnf, Sv_target):
+        """
+        scale the total runoff (kg s^-1) to a Sv target
+        """
+
+        rho0=1026
+
+        rnf_Sv = rnf / (rho0 * 1e6)
+
+        rnf_total = rnf_Sv.sum()
+
+        scaling = rnf_total / Sv_target
+
+        rnf_scaled = rnf * scaling
+
+        return rnf_scaled
+
+    def merge_with_modern(self, rnf):
+        """
+        """
+
+        # get runoff data
+        path = self.root + "RNF/runoff_1m_nomask.nc"
+        rnf_mod = xr.open_dataset(path, chunks=-1)
+
+    def create_palaeo_rnf_NEMO(self, period="8ka"):
+
+        self.period = period
+        scaling = 0.05 # total Sv to scale to 
+        self.get_domcfg()
+        rnf = self.map_rnf_to_coastline()
+        
+        print (rnf)
+        print (kjd)
+        # expand dimensions
+        rnf_2d = xr.full_like(self.domcfg.top_level, 0)
+        for  
+
+        rnf_scaled = self.scale_Sv(rnf, scaling)
+
+        rnf_formated = self.format_for_NEMO(rnf_scaled, self.domcfg)
+
+        self.merge_with_modern(rnf)
+
+        rnf_formated.to_netcdf(self.root + f"/RNF/rnf_{period}_{scaling}.nc")
+
+
 
 #    coast_y, coast_x = np.where(coast_mask == 1)
 #    coast_points = np.column_stack((lon_region[coast_y, coast_x], lat_region[coast_y, coast_x]))
@@ -342,7 +404,7 @@ class forcing_perturbation(object):
 #
 #    target_y = coast_y[nearest]
 #    target_x = coast_x[nearest]
-#
+
 #    # Add together catchments that go to the same coast cell.
 #    np.add.at(river_on_region, (target_y, target_x), river_values)
 #
@@ -354,6 +416,7 @@ forper =  forcing_perturbation()
 #forper.factor_greenland_runoff(10)
 #forper.plot_greenland_mask()
 #forper.plot_palaeo_routing("9ka")
-forper.map_rnf_to_coastline()
+#forper.map_rnf_to_coastline()
+forper.create_palaeo_rnf_NEMO(period="8ka")
 #forper.get_NAARC_coastline()
 #forper.plot_runoff_spatially()
